@@ -24,7 +24,8 @@ Fisper does the same job **entirely on your Mac**: Whisper runs on the GPU for s
 ## Features
 
 **Dictation**
-- **Hold-to-talk anywhere** — hold <kbd>fn</kbd> (or right ⌥ / ⌘ / ⇧ / ⌃, ⌃⌥, ⌥⌘), speak, release. Text lands at your cursor in any app: Messages, Mail, Slack, Notes, VS Code/Cursor, terminals, ChatGPT/Claude…
+- **Hold-to-talk anywhere** — hold <kbd>fn</kbd>, speak, release. Text lands at your cursor in any app: Messages, Mail, Slack, Notes, VS Code/Cursor, terminals, ChatGPT/Claude…
+- **Pick any keys** — click *Change…* and press whatever you want: a single modifier (fn, right ⌥, left ⌃), a chord (left ⌃ + left ⌥), or a key combo (⌃⌥ Space, F5). Separate, customizable shortcuts for *start/stop hands-free* and *paste last*.
 - **Hands-free** — double-tap the key or press <kbd>space</kbd> while holding it; finish with the key or ✓. <kbd>Esc</kbd> cancels, <kbd>⌃⌘V</kbd> pastes the last dictation again.
 - **Transcribes while you speak** — long dictations are streamed to Whisper in the background at natural pauses, so a 2-minute ramble finishes as fast as a sentence.
 - **Fast** — ~0.3–0.6 s speech-to-text on Apple Silicon (adaptive Whisper context, model kept warm), ~1 s release-to-text including AI clean-up.
@@ -42,7 +43,15 @@ Fisper does the same job **entirely on your Mac**: Whisper runs on the GPU for s
 - Every AI rewrite is validated: if it adds content, answers your question or drops text, Fisper falls back to the deterministic cleaner.
 - **Dictionary** (names, jargon, "chat GPT → ChatGPT" — also fed to Whisper as hints) and **Snippets** ("my email" → your address).
 
-**Make it yours** — 40+ settings in a native System Settings–style layout: shortcut, tap sensitivity, hands-free behaviour, max length, excluded apps, insert method (paste / type it out / clipboard), smart spacing, trailing space, auto-Return, model, language, noise mode, isolation strength, accent color, Liquid Glass or Midnight flow bar, bar position & size, sounds & volume, history retention…
+**Learns you**
+- **Learns from your corrections** — fix a word right after dictating ("Ria" → "Priya", "iphone" → "iPhone") and it's added to your Dictionary automatically.
+- **Learns your names & jargon** from your history and hints them to the speech model.
+- **Matches your writing style** — the AI sees a few of your own recent dictations from the same kind of app, so it keeps your tone, casing and phrasing.
+- **Your voice** insights — filler words you use, names it picked up, corrections learned.
+
+**The flow bar** — drag it anywhere (it remembers, snaps to center), click it to dictate, right-click for options. Glass or Midnight, with your own bar color, waveform color, opacity and size.
+
+**Make it yours** — 50+ settings in a native System Settings–style layout: shortcut, tap sensitivity, hands-free behaviour, max length, excluded apps, insert method (paste / type it out / clipboard), smart spacing, trailing space, auto-Return, model, language, noise mode, isolation strength, accent color (presets or any color), light/dark/system, flow bar style, colors, opacity, position & size, sounds & volume, history retention…
 
 **Reliable** — crash-isolated speech engine that restarts itself, self-healing keyboard listener, automatic retry on Whisper repetition loops, failed dictations saved for one-click re-transcribe, built-in diagnostics.
 
@@ -153,7 +162,7 @@ Audio, transcripts, history, dictionary and snippets stay in `~/Library/Applicat
 
 ## Troubleshooting
 
-- **Shortcut does nothing** — check Accessibility is on for Fisper. After rebuilding from source, macOS may need you to toggle Fisper off and on again in Accessibility (ad-hoc signatures change on every build).
+- **Shortcut does nothing** — check Accessibility is on for Fisper. When building from source, run `./scripts/make_signing_cert.sh` once: it creates a local signing identity (in its own keychain) so macOS keeps your permissions across rebuilds. Without it, re-toggle Fisper in Accessibility after each build.
 - **Emoji picker appears** — set *Press 🌐 key to* → *Do Nothing*, or switch the shortcut to right ⌥.
 - **"We couldn't hear you"** — check the microphone in Settings; AirPods sometimes take a moment to switch to their mic. Settings → Advanced → *Run test dictation* checks the whole pipeline without a mic.
 - **Text was copied but not pasted** — the focused app may block synthetic paste (e.g. secure password fields). Press ⌘V yourself.

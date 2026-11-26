@@ -2,15 +2,19 @@ import Cocoa
 import Carbon.HIToolbox
 
 /// Global keyboard listener built on a CGEventTap.
-/// Detects hold-to-talk on a modifier key (fn / right ⌥ / right ⌘ / ⌃⌥), Space while held (lock hands-free),
-/// Esc (cancel) and ⌃⌘V (paste last transcript). Self-heals if macOS disables the tap.
+/// Hold-to-talk on any user-recorded shortcut (modifier-only or key combo), Space while held (lock hands-free),
+/// Esc (cancel), a paste-last shortcut and an optional hands-free toggle shortcut. Self-heals if macOS disables the tap.
 @MainActor
 final class HotkeyManager {
-    enum KeyEvent { case pressed, released, spaceWhileHeld, otherKeyWhileHeld, escape, pasteLast }
+    enum KeyEvent { case pressed, released, spaceWhileHeld, otherKeyWhileHeld, escape, pasteLast, toggle }
 
     /// Return true to swallow the key event.
     var handler: ((KeyEvent) -> Bool)?
-    var choice: HotkeyChoice = .fn { didSet { if oldValue != choice { isDown = false } } }
+    var shortcut: Shortcut = .fnKey { didSet { if oldValue != shortcut { isDown = false } } }
+    var pasteLastShortcut: Shortcut? = .defaultPasteLast
+    var toggleShortcut: Shortcut?
+    /// While the user records a new shortcut, the tap stays out of the way.
+    var paused = false
     private(set) var isDown = false
     private(set) var isInstalled = false
 
@@ -61,76 +65,72 @@ final class HotkeyManager {
         install()
     }
 
-    // Device-dependent modifier bits (IOLLEvent.h)
-    private static let rightOptionBit: UInt64 = 0x40
-    private static let rightCommandBit: UInt64 = 0x10
-    private static let rightShiftBit: UInt64 = 0x04
-    private static let rightControlBit: UInt64 = 0x2000
-
     fileprivate func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
             return Unmanaged.passUnretained(event)
         }
-        if event.getIntegerValueField(.eventSourceUserData) == Self.syntheticMarker {
+        if paused || event.getIntegerValueField(.eventSourceUserData) == Self.syntheticMarker {
             return Unmanaged.passUnretained(event)
         }
-        let flags = event.flags
-        let keycode = event.getIntegerValueField(.keyboardEventKeycode)
+        let raw = event.flags.rawValue
+        let keycode = Int(event.getIntegerValueField(.keyboardEventKeycode))
+        let generic = raw & Shortcut.genericMask
+        let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
 
         switch type {
         case .flagsChanged:
-            let down = hotkeyState(flags: flags)
+            guard shortcut.isModifierOnly else { break }
+            let down = modifierShortcutHeld(raw)
             if down != isDown {
-                // only start when the hotkey is pressed on its own (no ⌘/⇧ etc. already held)
-                if down && !otherModifiersClear(flags) { return Unmanaged.passUnretained(event) }
+                // only start when the shortcut is pressed on its own (no other modifiers already held)
+                if down && (generic & ~shortcut.impliedGeneric) != 0 { return Unmanaged.passUnretained(event) }
                 isDown = down
                 _ = handler?(down ? .pressed : .released)
             }
         case .keyDown:
-            if keycode == Int64(kVK_Escape) {
-                if handler?(.escape) == true { swallowedKeyUps.insert(keycode); return nil }
-            } else if keycode == Int64(kVK_ANSI_V) && flags.contains(.maskCommand) && flags.contains(.maskControl)
-                        && !flags.contains(.maskShift) && !flags.contains(.maskAlternate) {
-                if handler?(.pasteLast) == true { swallowedKeyUps.insert(keycode); return nil }
+            if matches(pasteLastShortcut, keycode, generic) {
+                if isRepeat || handler?(.pasteLast) == true { swallowedKeyUps.insert(Int64(keycode)); return nil }
+            }
+            if matches(toggleShortcut, keycode, generic) {
+                if !isRepeat { _ = handler?(.toggle) }
+                swallowedKeyUps.insert(Int64(keycode)); return nil
+            }
+            if !shortcut.isModifierOnly && matches(shortcut, keycode, generic) {
+                if !isDown && !isRepeat { isDown = true; _ = handler?(.pressed) }
+                swallowedKeyUps.insert(Int64(keycode)); return nil
+            }
+            if keycode == kVK_Escape {
+                if handler?(.escape) == true { swallowedKeyUps.insert(Int64(keycode)); return nil }
             } else if isDown {
-                if keycode == Int64(kVK_Space) {
-                    if handler?(.spaceWhileHeld) == true { swallowedKeyUps.insert(keycode); return nil }
+                if keycode == kVK_Space && shortcut.keyCode != kVK_Space {
+                    if handler?(.spaceWhileHeld) == true { swallowedKeyUps.insert(Int64(keycode)); return nil }
                 } else {
                     _ = handler?(.otherKeyWhileHeld)
                 }
             }
         case .keyUp:
-            if swallowedKeyUps.remove(keycode) != nil { return nil }
+            if !shortcut.isModifierOnly && keycode == shortcut.keyCode && isDown {
+                isDown = false
+                _ = handler?(.released)
+                swallowedKeyUps.remove(Int64(keycode))
+                return nil
+            }
+            if swallowedKeyUps.remove(Int64(keycode)) != nil { return nil }
         default: break
         }
         return Unmanaged.passUnretained(event)
     }
 
-    private func hotkeyState(flags: CGEventFlags) -> Bool {
-        switch choice {
-        case .fn: return flags.contains(.maskSecondaryFn)
-        case .rightOption: return flags.rawValue & Self.rightOptionBit != 0
-        case .rightCommand: return flags.rawValue & Self.rightCommandBit != 0
-        case .rightShift: return flags.rawValue & Self.rightShiftBit != 0
-        case .rightControl: return flags.rawValue & Self.rightControlBit != 0
-        case .controlOption: return flags.contains(.maskControl) && flags.contains(.maskAlternate)
-        case .optionCommand: return flags.contains(.maskAlternate) && flags.contains(.maskCommand)
-        }
+    private func modifierShortcutHeld(_ raw: UInt64) -> Bool {
+        if shortcut.deviceMods != 0 { return raw & shortcut.deviceMods == shortcut.deviceMods }
+        return shortcut.genericMods != 0 && raw & shortcut.genericMods == shortcut.genericMods
     }
 
-    private func otherModifiersClear(_ flags: CGEventFlags) -> Bool {
-        var others: CGEventFlags = [.maskShift, .maskCommand, .maskControl, .maskAlternate]
-        switch choice {
-        case .fn: break
-        case .rightOption: others.remove(.maskAlternate)
-        case .rightCommand: others.remove(.maskCommand)
-        case .rightShift: others.remove(.maskShift)
-        case .rightControl: others.remove(.maskControl)
-        case .controlOption: others.remove(.maskControl); others.remove(.maskAlternate)
-        case .optionCommand: others.remove(.maskAlternate); others.remove(.maskCommand)
-        }
-        return flags.intersection(others).isEmpty
+    /// Key combos match on the exact set of ⌃⌥⇧⌘ (fn and Caps Lock are ignored — F-keys carry fn on laptops).
+    private func matches(_ s: Shortcut?, _ keycode: Int, _ generic: UInt64) -> Bool {
+        guard let s, let k = s.keyCode, k == keycode else { return false }
+        return generic == s.genericMods
     }
 }
 

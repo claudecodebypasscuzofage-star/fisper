@@ -24,22 +24,39 @@ struct DictionaryView: View {
                 ListContainer {
                     ForEach(Array(items.enumerated()), id: \.element.id) { idx, e in
                         ListRow(onEdit: { editing = e }, onDelete: { state.dictionary.items.removeAll { $0.id == e.id } }) {
-                            if e.isCorrection {
-                                HStack(spacing: 6) {
-                                    Text(e.word).foregroundStyle(Theme.text2)
-                                    Image(systemName: "arrow.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.text3)
-                                    Text(e.replacement!)
+                            HStack(spacing: 8) {
+                                if e.isCorrection {
+                                    HStack(spacing: 6) {
+                                        Text(e.word).foregroundStyle(Theme.text2)
+                                        Image(systemName: "arrow.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.text3)
+                                        Text(e.replacement!)
+                                    }
+                                } else {
+                                    Text(e.word)
                                 }
-                            } else {
-                                Text(e.word)
+                                if e.learned == true {
+                                    Label("Learned", systemImage: "sparkles").font(.system(size: 10.5, weight: .medium))
+                                        .foregroundStyle(Theme.forest)
+                                        .padding(.horizontal, 6).padding(.vertical, 2)
+                                        .background(Capsule().fill(Theme.forestSoft))
+                                        .help("Fisper learned this when you corrected a dictation")
+                                }
                             }
                         }
                         if idx < items.count - 1 { Divider().overlay(Theme.hairline) }
                     }
                 }
             }
-            Text("Words here are also fed to Whisper as hints, so they're recognized more often in the first place.")
+            Text("Words here are also fed to Whisper as hints, so they're recognized more often in the first place. When you fix a word right after dictating, Fisper adds it here automatically ✨.")
                 .font(.system(size: 12)).foregroundStyle(Theme.text3)
+            let picked = state.personal.profile.learnedWords
+            if !picked.isEmpty && state.prefs.learnVocabulary {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("PICKED UP FROM YOUR DICTATIONS").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.text3).tracking(0.6)
+                    Chips(items: Array(picked.prefix(24)))
+                    Text("Fisper hints these names and terms to the speech model automatically.").font(.system(size: 11.5)).foregroundStyle(Theme.text3)
+                }
+            }
         }
         .sheet(isPresented: $adding) { DictEditor(entry: nil) }
         .sheet(item: $editing) { e in DictEditor(entry: e) }

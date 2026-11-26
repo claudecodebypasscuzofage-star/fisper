@@ -119,6 +119,18 @@ enum FocusInspector {
         return (f as! AXUIElement)
     }
 
+    /// The focused text element and the insertion point (UTF-16 offset), for learning from later edits.
+    static func caret() -> (AXUIElement, Int)? {
+        guard AXIsProcessTrusted(), let el = focusedElement() else { return nil }
+        AXUIElementSetMessagingTimeout(el, 0.12)
+        var rangeRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(el, kAXSelectedTextRangeAttribute as CFString, &rangeRef) == .success,
+              let rr = rangeRef, CFGetTypeID(rr) == AXValueGetTypeID() else { return nil }
+        var range = CFRange()
+        guard AXValueGetValue(rr as! AXValue, .cfRange, &range) else { return nil }
+        return (el, range.location)
+    }
+
     /// Up to 80 characters immediately before the insertion point, or nil if unknown.
     static func textBeforeCursor() -> String? {
         guard AXIsProcessTrusted(), let el = focusedElement() else { return nil }

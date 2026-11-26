@@ -139,13 +139,14 @@ final class AIPolisher: ObservableObject {
     }
 
     /// Returns cleaned text, or nil when the AI output should not be trusted.
-    func polish(_ raw: String, engine: PolishEngine, ollamaModel: String) async -> String? {
+    func polish(_ raw: String, engine: PolishEngine, ollamaModel: String, examples: [String] = []) async -> String? {
         let wordCount = raw.split(separator: " ").count
         guard wordCount >= 4 else { return nil } // short phrases: rules are enough and instant
         let result: String?
+        let prompt = Self.userPrompt(raw, examples: examples)
         switch engine {
-        case .apple: result = await apple(raw)
-        case .ollama: result = try? await ollama(model: ollamaModel, raw: raw, keepAlive: "45m")
+        case .apple: result = await apple(prompt)
+        case .ollama: result = try? await ollama(model: ollamaModel, raw: prompt, keepAlive: "45m", wrapped: true)
         default: return nil
         }
         guard let out = result.map(Self.stripWrapper), !out.isEmpty else { return nil }
@@ -156,7 +157,17 @@ final class AIPolisher: ObservableObject {
         return out
     }
 
-    private func apple(_ raw: String) async -> String? {
+    /// The per-dictation message: optional style examples from the user's own writing, then the transcript.
+    static func userPrompt(_ raw: String, examples: [String]) -> String {
+        var p = ""
+        if !examples.isEmpty {
+            p += "For tone only — this is how this person usually writes (match their punctuation, casing and vocabulary; never copy these sentences):\n"
+            p += examples.map { "• \($0)" }.joined(separator: "\n") + "\n\n"
+        }
+        return p + "RAW: \(raw)\nCLEAN:"
+    }
+
+    private func apple(_ prompt: String) async -> String? {
         let session = (prewarmedFor == config ? prewarmed : nil) ?? LanguageModelSession(instructions: Self.instructions(config))
         prewarmed = nil
         defer {
@@ -165,7 +176,7 @@ final class AIPolisher: ObservableObject {
         }
         do {
             let r = try await withTimeout(seconds: 6) {
-                try await session.respond(to: "RAW: \(raw)\nCLEAN:", options: GenerationOptions(sampling: .greedy, temperature: 0))
+                try await session.respond(to: prompt, options: GenerationOptions(sampling: .greedy, temperature: 0))
             }
             return r?.content
         } catch {
@@ -174,7 +185,7 @@ final class AIPolisher: ObservableObject {
         }
     }
 
-    private func ollama(model: String, raw: String, keepAlive: String) async throws -> String? {
+    private func ollama(model: String, raw: String, keepAlive: String, wrapped: Bool = false) async throws -> String? {
         guard let url = URL(string: "http://127.0.0.1:11434/api/chat") else { return nil }
         let body: [String: Any] = [
             "model": model,
@@ -184,7 +195,7 @@ final class AIPolisher: ObservableObject {
             "options": ["temperature": 0, "num_predict": max(64, raw.count / 2 + 64), "num_ctx": 4096],
             "messages": [
                 ["role": "system", "content": Self.instructions(config)],
-                ["role": "user", "content": "RAW: \(raw)\nCLEAN:"],
+                ["role": "user", "content": wrapped ? raw : "RAW: \(raw)\nCLEAN:"],
             ],
         ]
         var req = URLRequest(url: url)

@@ -73,7 +73,7 @@ struct HeroCard: View {
                     Button("Show me how") { showHowTo = true }.buttonStyle(PrimaryButton())
                     shortcut("Hands-free", [prefs.hotkey.keyLabel, prefs.hotkey.keyLabel])
                     shortcut("Cancel", ["esc"])
-                    shortcut("Paste last", ["⌃", "⌘", "V"])
+                    if let p = prefs.pasteLastShortcut { shortcut("Paste last", p.parts) }
                 }
                 .padding(.top, 6)
             }
@@ -339,7 +339,7 @@ struct HowToSheet: View {
             tip("doc.on.clipboard", "Paste last", "⌃⌘V pastes your last dictation again.")
             tip("arrow.uturn.backward", "Change your mind", "“Let's meet Tuesday — no, Wednesday” → “Let's meet Wednesday.”")
             tip("list.bullet", "Lists & new lines", "Say “first… second…” for lists, or “new line” / “new paragraph”.")
-            if prefs.hotkey == .fn {
+            if prefs.hotkey.isFn {
                 Text("Tip: if the emoji picker pops up when you press fn, set System Settings → Keyboard → “Press 🌐 key to” → Do Nothing.")
                     .font(.system(size: 12)).foregroundStyle(Theme.text2)
             }

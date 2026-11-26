@@ -2,18 +2,44 @@ import SwiftUI
 import AppKit
 import Combine
 
-/// The floating pill. One capsule that morphs between states (idle → listening → hands-free → thinking → notice).
+/// Shared state between the AppKit panel and the SwiftUI pill.
+@MainActor
+final class FlowBarModel: ObservableObject {
+    @Published var hovering = false
+    @Published var dragging = false
+    @Published var anchorTop = false
+    var pillFrame: CGRect = .zero          // in the panel's SwiftUI coordinates (top-left origin)
+    var onDragChanged: () -> Void = {}
+    var onDragEnded: () -> Void = {}
+    var onMove: (BarPosition) -> Void = { _ in }
+}
+
+private final class FlowPanel: NSPanel {
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+}
+
+/// Lets the first click on the pill work even when Fisper isn't the active app.
+private final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
+/// The floating pill. One capsule that morphs between states; drag it anywhere, it remembers where.
 @MainActor
 final class FlowBarController {
     private let panel: NSPanel
     private let state = AppState.shared
+    private var prefs: Preferences { state.prefs }
     private var bag = Set<AnyCancellable>()
-    private let hover = FlowBarHover()
-    static let panelSize = NSSize(width: 420, height: 110)
+    private let model = FlowBarModel()
+    static let panelSize = NSSize(width: 440, height: 120)
+    private var dragStartMouse: NSPoint = .zero
+    private var dragStartOrigin: NSPoint = .zero
+    private var lastScreen: NSScreen?
 
     init() {
-        panel = NSPanel(contentRect: NSRect(origin: .zero, size: Self.panelSize),
-                        styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel = FlowPanel(contentRect: NSRect(origin: .zero, size: Self.panelSize),
+                          styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isFloatingPanel = true
         panel.level = .statusBar
         panel.backgroundColor = .clear
@@ -22,85 +48,190 @@ final class FlowBarController {
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         panel.isMovable = false
-        // ignoresMouseEvents is deliberately left unset: AppKit then passes clicks through transparent pixels,
-        // so only the pill itself is clickable.
-        let host = NSHostingView(rootView: FlowBarView(hover: hover).environmentObject(state).environmentObject(state.prefs))
+        panel.ignoresMouseEvents = true      // flipped on only while the pointer is over the pill
+        let host = FirstMouseHostingView(rootView: FlowBarView(model: model).environmentObject(state).environmentObject(state.prefs))
         host.sizingOptions = []
         panel.contentView = host
 
+        model.onDragChanged = { [weak self] in self?.dragChanged() }
+        model.onDragEnded = { [weak self] in self?.dragEnded() }
+        model.onMove = { [weak self] pos in
+            guard let self else { return }
+            self.prefs.barCustomPosition = nil
+            self.prefs.barPosition = pos
+            self.reposition(force: true)
+        }
+
         state.$phase.sink { [weak self] p in self?.update(phase: p) }.store(in: &bag)
-        state.prefs.objectWillChange.sink { [weak self] _ in
+        prefs.objectWillChange.sink { [weak self] _ in
             DispatchQueue.main.async { guard let self else { return }; self.reposition(); self.update(phase: self.state.phase) }
         }.store(in: &bag)
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.reposition() }
+            MainActor.assumeIsolated { self?.reposition(force: true) }
+        }
+        // Pointer tracking works even when Fisper is in the background (no permissions needed).
+        Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.trackMouse() }
         }
         Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.reposition() }
         }
-        reposition()
+        reposition(force: true)
         update(phase: .idle)
     }
+
+    // MARK: Position
 
     private var currentScreen: NSScreen? {
         let mouse = NSEvent.mouseLocation
         return NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
     }
 
-    func reposition() {
-        // don't jump screens mid-dictation
-        if case .recording = state.phase, panel.isVisible { return }
+    func reposition(force: Bool = false) {
+        guard !model.dragging else { return }
+        if case .recording = state.phase, panel.isVisible, !force { return }   // don't jump screens mid-dictation
         guard let screen = currentScreen else { return }
+        if !force && screen == lastScreen && panel.isVisible && prefs.barCustomPosition == nil && !needsPresetMove(screen) { return }
+        lastScreen = screen
         let vf = screen.visibleFrame
         let size = panel.frame.size
-        let y = state.prefs.barPosition == .bottom ? vf.minY + 4 : vf.maxY - size.height - 4
-        let origin = NSPoint(x: (vf.midX - size.width / 2).rounded(), y: y.rounded())
+        var origin: NSPoint
+        if let p = prefs.barCustomPosition {
+            origin = NSPoint(x: vf.minX + p.x * vf.width - size.width / 2, y: vf.minY + p.y * vf.height - size.height / 2)
+            model.anchorTop = p.y > 0.5
+        } else {
+            let top = prefs.barPosition == .top
+            origin = NSPoint(x: vf.midX - size.width / 2, y: top ? vf.maxY - size.height : vf.minY)
+            model.anchorTop = top
+        }
+        origin = clamp(origin, in: vf)
+        origin = NSPoint(x: origin.x.rounded(), y: origin.y.rounded())
         if panel.frame.origin != origin { panel.setFrameOrigin(origin) }
+    }
+
+    private func needsPresetMove(_ screen: NSScreen) -> Bool {
+        let vf = screen.visibleFrame
+        let size = panel.frame.size
+        let top = prefs.barPosition == .top
+        let want = NSPoint(x: (vf.midX - size.width / 2).rounded(), y: (top ? vf.maxY - size.height : vf.minY).rounded())
+        return panel.frame.origin != want
+    }
+
+    private func clamp(_ o: NSPoint, in vf: NSRect) -> NSPoint {
+        let s = panel.frame.size
+        // keep the pill (centered in the panel) at least 40 pt inside the screen edges
+        return NSPoint(x: min(max(o.x, vf.minX + 40 - s.width / 2), vf.maxX - 40 - s.width / 2),
+                       y: min(max(o.y, vf.minY), vf.maxY - s.height))
+    }
+
+    // MARK: Drag
+
+    private func dragChanged() {
+        if !model.dragging {
+            model.dragging = true
+            dragStartMouse = NSEvent.mouseLocation
+            dragStartOrigin = panel.frame.origin
+            NSCursor.closedHand.push()
+        }
+        let m = NSEvent.mouseLocation
+        var o = NSPoint(x: dragStartOrigin.x + m.x - dragStartMouse.x, y: dragStartOrigin.y + m.y - dragStartMouse.y)
+        if let vf = (NSScreen.screens.first { NSMouseInRect(m, $0.frame, false) } ?? NSScreen.main)?.visibleFrame {
+            // gentle snap to the horizontal center
+            if abs((o.x + panel.frame.width / 2) - vf.midX) < 14 { o.x = vf.midX - panel.frame.width / 2 }
+            o = clamp(o, in: vf)
+        }
+        panel.setFrameOrigin(o)
+        if let vf = currentScreen?.visibleFrame { model.anchorTop = (o.y + panel.frame.height / 2 - vf.minY) / vf.height > 0.5 }
+    }
+
+    private func dragEnded() {
+        NSCursor.pop()
+        model.dragging = false
+        guard let screen = (NSScreen.screens.first { $0.frame.intersects(panel.frame) } ?? NSScreen.main) else { return }
+        let vf = screen.visibleFrame
+        let c = NSPoint(x: panel.frame.midX, y: panel.frame.midY)
+        let fx = (c.x - vf.minX) / vf.width, fy = (c.y - vf.minY) / vf.height
+        // dropped back on a preset spot → use the preset
+        if abs(fx - 0.5) < 0.02 && panel.frame.minY - vf.minY < 6 { prefs.barCustomPosition = nil; prefs.barPosition = .bottom }
+        else if abs(fx - 0.5) < 0.02 && vf.maxY - panel.frame.maxY < 6 { prefs.barCustomPosition = nil; prefs.barPosition = .top }
+        else { prefs.barCustomPosition = CGPoint(x: min(1, max(0, fx)), y: min(1, max(0, fy))) }
+        lastScreen = screen
+    }
+
+    // MARK: Hover
+
+    private func trackMouse() {
+        guard panel.isVisible else { return }
+        if model.dragging { panel.ignoresMouseEvents = false; return }
+        let f = model.pillFrame
+        guard f.width > 0 else { return }
+        let screenRect = NSRect(x: panel.frame.minX + f.minX, y: panel.frame.maxY - f.maxY, width: f.width, height: f.height)
+        let inside = screenRect.insetBy(dx: -8, dy: -8).contains(NSEvent.mouseLocation)
+        if panel.ignoresMouseEvents == inside { panel.ignoresMouseEvents = !inside }
+        if model.hovering != inside {
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.8)) { model.hovering = inside }
+        }
     }
 
     private func update(phase: AppState.Phase) {
         let visible: Bool
         switch phase {
-        case .idle: visible = state.prefs.showIdleBar
+        case .idle: visible = prefs.showIdleBar
         default: visible = true
         }
         if visible {
-            if !panel.isVisible { reposition(); panel.orderFrontRegardless() }
+            if !panel.isVisible { reposition(force: true); panel.orderFrontRegardless() }
         } else if panel.isVisible {
-            // let the collapse animation finish before hiding
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                guard let self, case .idle = self.state.phase, !self.state.prefs.showIdleBar else { return }
+                guard let self, case .idle = self.state.phase, !self.prefs.showIdleBar else { return }
                 self.panel.orderOut(nil)
             }
         }
     }
 }
 
-final class FlowBarHover: ObservableObject { @Published var hovering = false }
-
 struct FlowBarView: View {
     @EnvironmentObject var state: AppState
     @EnvironmentObject var prefs: Preferences
-    @ObservedObject var hover: FlowBarHover
+    @ObservedObject var model: FlowBarModel
 
     var body: some View {
-        let bottom = prefs.barPosition == .bottom
-        ZStack(alignment: bottom ? .bottom : .top) {
+        let top = model.anchorTop
+        ZStack(alignment: top ? .top : .bottom) {
             Color.clear
-            FlowPill(phase: state.phase, levels: state.levels, hovering: hover.hovering, keyLabel: prefs.hotkey.keyLabel,
-                     style: prefs.barStyle, hidden: !prefs.showIdleBar && state.phase == .idle,
+            FlowPill(phase: state.phase, levels: state.levels, hovering: model.hovering || model.dragging,
+                     keyLabel: prefs.hotkey.keyLabel, style: prefs.barStyle,
+                     barColor: prefs.barColor.color, waveColor: prefs.waveColor.color, opacity: prefs.barOpacity,
+                     hidden: !prefs.showIdleBar && state.phase == .idle,
                      onTap: { state.toggleHandsFree() },
                      onCancel: { state.cancel(silent: false) },
-                     onDone: { state.stopAndTranscribe(reason: "button") },
-                     onHover: { h in withAnimation(.spring(response: 0.32, dampingFraction: 0.8)) { hover.hovering = h } })
-                .scaleEffect(prefs.barScale, anchor: bottom ? .bottom : .top)
-                .padding(bottom ? .bottom : .top, 8)
+                     onDone: { state.stopAndTranscribe(reason: "button") })
+                .scaleEffect(prefs.barScale, anchor: top ? .top : .bottom)
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { model.pillFrame = $0 }
+                .gesture(
+                    DragGesture(minimumDistance: 4, coordinateSpace: .global)
+                        .onChanged { _ in model.onDragChanged() }
+                        .onEnded { _ in model.onDragEnded() }
+                )
+                .contextMenu {
+                    Button(isRecording ? "Finish dictation" : "Start dictation") { state.toggleHandsFree() }
+                    Divider()
+                    Button("Move to bottom center") { model.onMove(.bottom) }
+                    Button("Move to top center") { model.onMove(.top) }
+                    Toggle("Show when idle", isOn: Binding(get: { prefs.showIdleBar }, set: { prefs.showIdleBar = $0 }))
+                    Divider()
+                    Button("Flow bar settings…") {
+                        state.selectedPage = .appearance
+                        NotificationCenter.default.post(name: .fisperOpenWindow, object: nil)
+                    }
+                }
+                .padding(top ? .top : .bottom, 10)
         }
         .frame(width: FlowBarController.panelSize.width, height: FlowBarController.panelSize.height)
     }
-}
 
-private let midnight = Color(hex: 0x0B0B0C)
+    private var isRecording: Bool { if case .recording = state.phase { return true }; return false }
+}
 
 struct FlowPill: View {
     let phase: AppState.Phase
@@ -108,11 +239,13 @@ struct FlowPill: View {
     let hovering: Bool
     let keyLabel: String
     let style: BarStyle
+    var barColor: Color = Color(hex: 0x0B0B0C)
+    var waveColor: Color = .white
+    var opacity: Double = 0.82
     var hidden = false
     var onTap: () -> Void = {}
     var onCancel: () -> Void = {}
     var onDone: () -> Void = {}
-    var onHover: (Bool) -> Void = { _ in }
 
     private enum Kind: Equatable { case idle, hover, listening, handsFree, thinking, notice }
     private var kind: Kind {
@@ -126,88 +259,99 @@ struct FlowPill: View {
 
     private var size: CGSize {
         switch kind {
-        case .idle: return CGSize(width: 46, height: 10)
-        case .hover: return CGSize(width: 212, height: 30)
-        case .listening: return CGSize(width: 108, height: 34)
-        case .handsFree: return CGSize(width: 172, height: 36)
-        case .thinking: return CGSize(width: 108, height: 34)
-        case .notice: return CGSize(width: 0, height: 32)
+        case .idle: return CGSize(width: 58, height: 18)
+        case .hover: return CGSize(width: 0, height: 34)
+        case .listening: return CGSize(width: 112, height: 36)
+        case .handsFree: return CGSize(width: 176, height: 38)
+        case .thinking: return CGSize(width: 112, height: 36)
+        case .notice: return CGSize(width: 0, height: 34)
         }
     }
 
     var body: some View {
         content
-            .frame(width: kind == .notice ? nil : size.width, height: size.height)
-            .padding(.horizontal, kind == .notice ? 14 : 0)
+            .frame(width: size.width == 0 ? nil : size.width, height: size.height)
+            .padding(.horizontal, size.width == 0 ? 16 : 0)
             .background { background }
-            .overlay {
-                Capsule().strokeBorder(borderColor, lineWidth: kind == .idle ? 0.75 : 1)
-            }
+            .overlay { Capsule().strokeBorder(.white.opacity(borderOpacity), lineWidth: kind == .idle ? 1 : 1.25) }
             .compositingGroup()
-            .shadow(color: .black.opacity(kind == .idle ? 0.12 : 0.28), radius: kind == .idle ? 3 : 12, y: kind == .idle ? 1 : 4)
+            .shadow(color: .black.opacity(0.32), radius: kind == .idle ? 5 : 14, y: kind == .idle ? 2 : 5)
             .opacity(hidden ? 0 : 1)
             .scaleEffect(hidden ? 0.6 : 1)
             .contentShape(Capsule())
-            .onHover(perform: onHover)
             .onTapGesture { if kind == .idle || kind == .hover { onTap() } }
             .animation(.spring(response: 0.36, dampingFraction: 0.78), value: kind)
             .animation(.spring(response: 0.3, dampingFraction: 0.85), value: hidden)
+            .help("Click to dictate · drag to move · right-click for options")
     }
 
-    private var borderColor: Color {
+    private var borderOpacity: Double {
         switch kind {
-        case .idle: return .white.opacity(0.35)
-        case .listening, .handsFree: return .white.opacity(style == .midnight ? 0.9 : 0.45)
-        default: return .white.opacity(0.25)
+        case .idle: return 0.55
+        case .hover: return 0.6
+        case .listening, .handsFree: return style == .midnight ? 0.9 : 0.6
+        default: return 0.35
         }
     }
 
     @ViewBuilder private var background: some View {
         switch style {
         case .glass:
-            // a dark wash under the glass keeps white content readable on any wallpaper
-            Capsule().fill(Color.black.opacity(kind == .idle ? 0.35 : 0.5))
-                .glassEffect(.regular.tint(Color.black.opacity(0.25)), in: Capsule())
+            // The solid base is a separate layer *under* the glass, so the pill is always clearly visible —
+            // even where Liquid Glass can't sample the background. The glass only adds the sheen.
+            // (SwiftUI's .glassEffect doesn't draw reliably in a floating non-activating panel, so the glass
+            //  look is built from a blur material, a tinted body and a specular highlight.)
+            ZStack {
+                Capsule().fill(.ultraThinMaterial).environment(\.colorScheme, .dark)
+                Capsule().fill(barColor.opacity(max(0.5, opacity * (kind == .idle ? 0.8 : 0.92))))
+                Capsule().fill(LinearGradient(colors: [.white.opacity(0.22), .white.opacity(0.04), .clear],
+                                              startPoint: .top, endPoint: .center))
+                    .padding(1)
+            }
         case .midnight:
-            Capsule().fill(midnight.opacity(kind == .idle ? 0.6 : 1))
+            Capsule().fill(barColor.opacity(kind == .idle ? max(0.6, opacity) : 1))
         }
     }
 
     @ViewBuilder private var content: some View {
         switch kind {
         case .idle:
-            HStack(spacing: 3) {
-                ForEach(0..<7, id: \.self) { _ in Circle().fill(Color.white.opacity(0.55)).frame(width: 2, height: 2) }
+            HStack(spacing: 2.5) {
+                ForEach([0.35, 0.6, 1.0, 0.6, 0.35], id: \.self) { h in
+                    Capsule().fill(waveColor.opacity(0.85)).frame(width: 2.2, height: 9 * h)
+                }
             }
             .transition(.opacity)
         case .hover:
-            HStack(spacing: 5) {
-                Text("Click or hold").foregroundStyle(.white.opacity(0.75))
-                Text(keyLabel).fontWeight(.semibold).foregroundStyle(.white)
-                Text("to dictate").foregroundStyle(.white.opacity(0.75))
+            HStack(spacing: 6) {
+                Image(systemName: "mic.fill").font(.system(size: 10.5, weight: .semibold)).foregroundStyle(waveColor)
+                Text("Click or hold").foregroundStyle(waveColor.opacity(0.75))
+                Text(keyLabel).fontWeight(.semibold).foregroundStyle(waveColor)
+                Text("to dictate").foregroundStyle(waveColor.opacity(0.75))
+                Image(systemName: "line.3.horizontal").font(.system(size: 9.5)).foregroundStyle(waveColor.opacity(0.45))
             }
-            .font(.system(size: 11.5, weight: .medium))
+            .font(.system(size: 12, weight: .medium))
             .fixedSize()
-            .transition(.opacity.combined(with: .scale(scale: 0.9)))
+            .transition(.opacity.combined(with: .scale(scale: 0.92)))
         case .listening:
-            WaveformBars(levels: levels).frame(height: 20).transition(.opacity)
+            WaveformBars(levels: levels, color: waveColor).frame(height: 20).transition(.opacity)
         case .handsFree:
             HStack(spacing: 8) {
-                CircleButton(symbol: "xmark", action: onCancel)
-                WaveformBars(levels: levels, count: 11).frame(height: 20)
-                CircleButton(symbol: "checkmark", filled: true, action: onDone)
+                CircleButton(symbol: "xmark", tint: waveColor, action: onCancel)
+                WaveformBars(levels: levels, count: 11, color: waveColor).frame(height: 20)
+                CircleButton(symbol: "checkmark", filled: true, tint: waveColor, ink: barColor, action: onDone)
             }
             .transition(.opacity)
         case .thinking:
-            ThinkingDots().transition(.opacity)
+            ThinkingDots(color: waveColor).transition(.opacity)
         case .notice:
             if case .notice(let msg, let isError) = phase {
                 HStack(spacing: 7) {
                     Image(systemName: isError ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
                         .foregroundStyle(isError ? Color(hex: 0xFF9F8A) : Color(hex: 0x7FE0C4))
-                    Text(msg).foregroundStyle(.white).lineLimit(1)
+                    Text(msg).foregroundStyle(waveColor).lineLimit(1)
                 }
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: 12.5, weight: .medium))
                 .fixedSize()
                 .transition(.opacity)
             }
@@ -218,12 +362,11 @@ struct FlowPill: View {
 struct WaveformBars: View {
     let levels: [Float]
     var count = 13
+    var color: Color = .white
     var body: some View {
         HStack(spacing: 2.6) {
             ForEach(0..<count, id: \.self) { i in
-                Capsule()
-                    .fill(Color.white)
-                    .frame(width: 2.6, height: 3 + CGFloat(sample(i)) * 15)
+                Capsule().fill(color).frame(width: 2.6, height: 3 + CGFloat(sample(i)) * 15)
             }
         }
         .animation(.easeOut(duration: 0.08), value: levels)
@@ -242,16 +385,18 @@ struct WaveformBars: View {
 struct CircleButton: View {
     let symbol: String
     var filled = false
+    var tint: Color = .white
+    var ink: Color = Color(hex: 0x0B0B0C)
     let action: () -> Void
     @State private var hover = false
     var body: some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 9.5, weight: .bold))
-                .foregroundStyle(filled ? midnight : .white)
-                .frame(width: 24, height: 24)
-                .background(Circle().fill(filled ? Color.white.opacity(hover ? 1 : 0.9) : Color.white.opacity(hover ? 0.32 : 0.18)))
-                .scaleEffect(hover ? 1.06 : 1)
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(filled ? ink : tint)
+                .frame(width: 25, height: 25)
+                .background(Circle().fill(filled ? tint.opacity(hover ? 1 : 0.9) : tint.opacity(hover ? 0.32 : 0.18)))
+                .scaleEffect(hover ? 1.08 : 1)
                 .animation(.spring(response: 0.25), value: hover)
         }
         .buttonStyle(.plain)
@@ -260,14 +405,14 @@ struct CircleButton: View {
 }
 
 struct ThinkingDots: View {
+    var color: Color = .white
     var body: some View {
         TimelineView(.animation) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate
             HStack(spacing: 3) {
                 ForEach(0..<9, id: \.self) { i in
                     let y = (sin(t * 7 - Double(i) * 0.6) + 1) / 2
-                    Capsule().fill(Color.white.opacity(0.35 + 0.65 * y))
-                        .frame(width: 2.6, height: 3 + CGFloat(y) * 6)
+                    Capsule().fill(color.opacity(0.35 + 0.65 * y)).frame(width: 2.6, height: 3 + CGFloat(y) * 6)
                 }
             }
         }

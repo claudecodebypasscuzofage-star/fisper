@@ -51,6 +51,7 @@ struct InsightsView: View {
                     }
                 }
             }
+            YourVoiceCard()
         }
     }
 
@@ -182,5 +183,93 @@ struct StreakHeatmap: View {
         if v == 0 { return Theme.hairline }
         let f = Double(v) / Double(maxV)
         return Theme.forest.opacity(0.3 + 0.7 * f)
+    }
+}
+
+
+struct YourVoiceCard: View {
+    @EnvironmentObject var state: AppState
+    var body: some View {
+        let p = state.personal.profile
+        Card {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Your voice").font(.system(size: 20, weight: .bold))
+                    Spacer()
+                    Text("Fisper adapts to these").font(.system(size: 11)).foregroundStyle(Theme.text3)
+                }
+                HStack(alignment: .top, spacing: 28) {
+                    stat("\(p.avgWords)", "words per dictation")
+                    stat("\(p.learnedWords.count)", "names & terms picked up")
+                    stat("\(p.correctionsLearned)", "corrections learned")
+                }
+                if !p.fillers.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("WORDS FISPER REMOVES FOR YOU").font(.system(size: 10.5, weight: .semibold)).foregroundStyle(Theme.text3).tracking(0.6)
+                        Chips(items: p.fillers.map { "“\($0.word)” ×\($0.count)" })
+                    }
+                }
+                if !p.learnedWords.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("NAMES & JARGON YOU USE").font(.system(size: 10.5, weight: .semibold)).foregroundStyle(Theme.text3).tracking(0.6)
+                        Chips(items: Array(p.learnedWords.prefix(14)))
+                    }
+                }
+                if !p.topWords.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("YOUR FAVORITE WORDS").font(.system(size: 10.5, weight: .semibold)).foregroundStyle(Theme.text3).tracking(0.6)
+                        Chips(items: p.topWords.prefix(8).map(\.word))
+                    }
+                }
+                if p.dictations < 3 {
+                    Text("Dictate a few times and Fisper will start learning your names, phrasing and habits.")
+                        .font(.system(size: 12.5)).foregroundStyle(Theme.text2)
+                }
+            }
+        }
+    }
+    private func stat(_ v: String, _ l: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(v).font(.system(size: 22, weight: .semibold))
+            Text(l).font(.system(size: 11)).foregroundStyle(Theme.text3)
+        }
+    }
+}
+
+struct Chips: View {
+    let items: [String]
+    var body: some View {
+        FlowLayout(spacing: 6) {
+            ForEach(items, id: \.self) { t in
+                Text(t).font(.system(size: 12, weight: .medium))
+                    .padding(.horizontal, 9).padding(.vertical, 4)
+                    .background(Capsule().fill(Theme.forestSoft))
+                    .foregroundStyle(Theme.text)
+            }
+        }
+    }
+}
+
+/// Simple wrapping layout for chips.
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 6
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxW = proposal.width ?? 600
+        var x: CGFloat = 0, y: CGFloat = 0, rowH: CGFloat = 0, widest: CGFloat = 0
+        for v in subviews {
+            let s = v.sizeThatFits(.unspecified)
+            if x + s.width > maxW && x > 0 { y += rowH + spacing; x = 0; rowH = 0 }
+            x += s.width + spacing; rowH = max(rowH, s.height); widest = max(widest, x)
+        }
+        return CGSize(width: min(maxW, widest), height: y + rowH)
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX, y = bounds.minY, rowH: CGFloat = 0
+        for v in subviews {
+            let s = v.sizeThatFits(.unspecified)
+            if x + s.width > bounds.maxX && x > bounds.minX { y += rowH + spacing; x = bounds.minX; rowH = 0 }
+            v.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(s))
+            x += s.width + spacing; rowH = max(rowH, s.height)
+        }
     }
 }

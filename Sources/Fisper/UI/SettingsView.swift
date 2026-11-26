@@ -46,10 +46,19 @@ struct GeneralSettings: View {
     var body: some View {
         SettingsPage(title: "General", subtitle: "Your shortcut and how Fisper behaves.", icon: "gearshape.fill") {
             Section("Shortcut") {
-                Picker("Hold to dictate", selection: $prefs.hotkey) {
-                    ForEach(HotkeyChoice.allCases) { Text($0.title).tag($0) }
+                LabeledContent {
+                    ShortcutField(required: $prefs.hotkey)
+                } label: {
+                    Text("Hold to dictate")
+                    Hint(text: "Any key or combo: fn, right ⌥, left ⌃ + left ⌥, ⌃⌥ Space, F5…")
                 }
-                if prefs.hotkey == .fn && Permissions.globeKeyUsage != 0 {
+                LabeledContent("Quick presets") {
+                    Menu(Shortcut.presets.first { $0.sameKeys(prefs.hotkey) }?.title ?? "Custom") {
+                        ForEach(Shortcut.presets, id: \.self) { p in Button(p.title) { prefs.hotkey = p } }
+                    }
+                    .fixedSize()
+                }
+                if prefs.hotkey.isFn && Permissions.globeKeyUsage != 0 {
                     LabeledContent {
                         Button("Open Keyboard Settings") { Permissions.openKeyboardSettings() }
                     } label: {
@@ -71,6 +80,20 @@ struct GeneralSettings: View {
                 Stepper(value: $prefs.maxRecordingMinutes, in: 1...30, step: 1) {
                     Text("Stop automatically after \(Int(prefs.maxRecordingMinutes)) min")
                 }
+            }
+            Section("More shortcuts") {
+                LabeledContent {
+                    ShortcutField(shortcut: $prefs.toggleShortcut, allowModifierOnly: false, optional: true)
+                } label: {
+                    Text("Start / stop hands-free")
+                    Hint(text: "Press once to start, again to finish — no holding.")
+                }
+                LabeledContent {
+                    ShortcutField(shortcut: $prefs.pasteLastShortcut, allowModifierOnly: false, optional: true)
+                } label: {
+                    Text("Paste last dictation")
+                }
+                LabeledContent("Cancel dictation") { KeyCap(label: "esc") }
             }
             Section("App") {
                 Toggle("Launch Fisper at login", isOn: $launchAtLogin)
@@ -293,6 +316,22 @@ struct WritingSettings: View {
                 }
             }
             Section {
+                Toggle(isOn: $prefs.matchMyStyle) {
+                    Text("Match my writing style")
+                    Hint(text: "Shows the AI a few of your recent dictations from the same kind of app, so it keeps your tone, casing and phrasing.")
+                }
+                Toggle(isOn: $prefs.learnFromEdits) {
+                    Text("Learn from my corrections")
+                    Hint(text: "If you fix a word right after dictating (“Ria” → “Priya”), Fisper adds it to your Dictionary.")
+                }
+                Toggle(isOn: $prefs.learnVocabulary) {
+                    Text("Learn names & jargon I use")
+                    Hint(text: "Words you say often are hinted to the speech model so they're recognized correctly.")
+                }
+            } header: {
+                Text("Personalization")
+            }
+            Section {
                 ZStack(alignment: .topLeading) {
                     if prefs.customInstructions.isEmpty {
                         Text("e.g. Use British spelling. Never use exclamation marks. Write “OK”, not “okay”. My company is spelled AcmeCo.")
@@ -344,9 +383,15 @@ struct AppearanceSettings: View {
 
     var body: some View {
         SettingsPage(title: "Appearance", subtitle: "Colors, the flow bar and sounds.", icon: "paintpalette.fill") {
+            Section("Look") {
+                Picker("Appearance", selection: $prefs.appearance) {
+                    ForEach(AppAppearance.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+            }
             Section("Accent color") {
                 HStack(spacing: 14) {
-                    ForEach(AccentChoice.allCases) { a in
+                    ForEach(AccentChoice.allCases.filter { $0 != .custom }) { a in
                         Button { prefs.accent = a } label: {
                             VStack(spacing: 5) {
                                 Circle()
@@ -357,6 +402,14 @@ struct AppearanceSettings: View {
                             }
                         }
                         .buttonStyle(.plain)
+                    }
+                    VStack(spacing: 5) {
+                        ColorPicker("", selection: Binding(get: { prefs.customAccent.color },
+                                                           set: { prefs.customAccent = RGBAColor($0); prefs.accent = .custom }),
+                                    supportsOpacity: false)
+                            .labelsHidden()
+                            .overlay(Circle().stroke(Color.primary.opacity(prefs.accent == .custom ? 0.85 : 0), lineWidth: 2).padding(-4).allowsHitTesting(false))
+                        Text("Custom").font(.system(size: 10.5)).foregroundStyle(Theme.text2)
                     }
                 }
                 .padding(.vertical, 6)
@@ -372,10 +425,28 @@ struct AppearanceSettings: View {
                     ForEach(BarStyle.allCases) { Text($0.title).tag($0) }
                 }
                 .pickerStyle(.segmented)
-                Picker("Position", selection: $prefs.barPosition) {
-                    ForEach(BarPosition.allCases) { Text($0.title).tag($0) }
+                LabeledContent {
+                    HStack {
+                        Picker("", selection: Binding(get: { prefs.barCustomPosition == nil ? prefs.barPosition : nil },
+                                                      set: { if let v = $0 { prefs.barCustomPosition = nil; prefs.barPosition = v } })) {
+                            ForEach(BarPosition.allCases) { Text($0.title).tag(Optional($0)) }
+                            if prefs.barCustomPosition != nil { Text("Custom").tag(BarPosition?.none) }
+                        }
+                        .labelsHidden().pickerStyle(.segmented).fixedSize()
+                    }
+                } label: {
+                    Text("Position")
+                    Hint(text: "Or just drag the bar anywhere on screen — it remembers.")
                 }
-                .pickerStyle(.segmented)
+                ColorPicker("Bar color", selection: Binding(get: { prefs.barColor.color }, set: { prefs.barColor = RGBAColor($0) }), supportsOpacity: false)
+                ColorPicker("Waveform & text color", selection: Binding(get: { prefs.waveColor.color }, set: { prefs.waveColor = RGBAColor($0) }), supportsOpacity: false)
+                LabeledContent("Opacity") {
+                    Slider(value: $prefs.barOpacity, in: 0.4...1.0).frame(width: 180)
+                }
+                Button("Reset flow bar look") {
+                    prefs.barColor = .midnight; prefs.waveColor = .white; prefs.barOpacity = 0.82; prefs.barScale = 1
+                    prefs.barCustomPosition = nil; prefs.barPosition = .bottom; prefs.barStyle = .glass
+                }
                 LabeledContent("Size") {
                     Slider(value: $prefs.barScale, in: 0.8...1.4, step: 0.05).frame(width: 180)
                 }
@@ -407,7 +478,8 @@ struct BarPreview: View {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(LinearGradient(colors: [Color(hex: 0x7BA7D9), Color(hex: 0xC9A5E0), Color(hex: 0xF2C6A0)], startPoint: .topLeading, endPoint: .bottomTrailing))
                     .frame(width: 300, height: 86)
-                FlowPill(phase: .recording(handsFree: true), levels: levels, hovering: false, keyLabel: prefs.hotkey.keyLabel, style: prefs.barStyle)
+                FlowPill(phase: .recording(handsFree: true), levels: levels, hovering: false, keyLabel: prefs.hotkey.keyLabel, style: prefs.barStyle,
+                         barColor: prefs.barColor.color, waveColor: prefs.waveColor.color, opacity: prefs.barOpacity)
                     .scaleEffect(prefs.barScale)
             }
         }
@@ -427,6 +499,7 @@ struct PrivacySettings: View {
                 Label("Audio and text are processed on-device", systemImage: "checkmark.shield.fill")
                 Label("No account, no analytics, no cloud", systemImage: "icloud.slash")
                 Label("Network is only used to download models you choose", systemImage: "arrow.down.circle")
+                Label("To learn from your corrections, Fisper re-reads only the text field it just typed into, a few seconds later", systemImage: "eye")
             }
             Section("History") {
                 Picker("Keep dictation history", selection: $prefs.retention) {

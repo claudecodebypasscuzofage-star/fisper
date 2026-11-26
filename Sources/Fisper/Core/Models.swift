@@ -89,6 +89,7 @@ struct DictEntry: Codable, Identifiable, Equatable, Hashable {
     var word: String              // canonical spelling, or the "heard" text when replacement is set
     var replacement: String?      // if set: "word" -> "replacement"
     var created = Date()
+    var learned: Bool? = nil      // added automatically from the user's own corrections
     var isCorrection: Bool { !(replacement ?? "").isEmpty }
     /// The word Whisper should be biased toward.
     var vocabularyTerm: String { isCorrection ? replacement! : word }

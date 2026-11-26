@@ -18,6 +18,8 @@ final class AppState: ObservableObject {
     let whisper = WhisperServer()
     let polisher = AIPolisher()
     let models = ModelManager()
+    let personal = Personalization()
+    private let editLearner = EditLearner()
     let history = JSONStore<Transcript>(url: Paths.history)
     let dictionary = JSONStore<DictEntry>(url: Paths.dictionary, defaultItems: [
         DictEntry(word: "Fisper"), DictEntry(word: "Mac OS", replacement: "macOS"), DictEntry(word: "ChatGPT"),
@@ -68,8 +70,10 @@ final class AppState: ObservableObject {
 
     func boot() {
         Log.trim()
-        Log.info("Fisper boot. model=\(prefs.modelID) hotkey=\(prefs.hotkey.rawValue) ax=\(accessibilityGranted) mic=\(micStatus.rawValue)")
-        hotkeys.choice = prefs.hotkey
+        Log.info("Fisper boot. model=\(prefs.modelID) shortcut=\(prefs.hotkey.keyLabel) ax=\(accessibilityGranted) mic=\(micStatus.rawValue)")
+        hotkeys.shortcut = prefs.hotkey
+        hotkeys.pasteLastShortcut = prefs.pasteLastShortcut
+        hotkeys.toggleShortcut = prefs.toggleShortcut
         hotkeys.handler = { [weak self] ev in self?.handle(ev) ?? false }
         hotkeys.start()
         hotkeyActive = hotkeys.isInstalled
@@ -87,12 +91,24 @@ final class AppState: ObservableObject {
             }
         }
 
-        prefs.$hotkey.dropFirst().sink { [weak self] h in self?.hotkeys.choice = h }.store(in: &bag)
+        prefs.$hotkey.dropFirst().sink { [weak self] h in self?.hotkeys.shortcut = h }.store(in: &bag)
+        prefs.$pasteLastShortcut.dropFirst().sink { [weak self] h in self?.hotkeys.pasteLastShortcut = h }.store(in: &bag)
+        prefs.$toggleShortcut.dropFirst().sink { [weak self] h in self?.hotkeys.toggleShortcut = h }.store(in: &bag)
         prefs.$modelID.dropFirst().removeDuplicates().sink { [weak self] id in self?.whisper.start(modelID: id) }.store(in: &bag)
         prefs.objectWillChange.sink { [weak self] in DispatchQueue.main.async { self?.syncPolisherConfig() } }.store(in: &bag)
         whisper.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &bag)
         polisher.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &bag)
         history.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &bag)
+        personal.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &bag)
+        history.$items.sink { [weak self] items in
+            guard let self else { return }
+            self.personal.scheduleRebuild(history: items, dictionary: self.dictionary.items)
+        }.store(in: &bag)
+        dictionary.$items.dropFirst().sink { [weak self] d in
+            guard let self else { return }
+            self.personal.scheduleRebuild(history: self.history.items, dictionary: d)
+        }.store(in: &bag)
+        editLearner.onLearn = { [weak self] heard, fixed in self?.learnCorrection(heard: heard, fixed: fixed) }
 
         syncPolisherConfig()
         whisper.start(modelID: prefs.modelID)
@@ -195,6 +211,10 @@ final class AppState: ObservableObject {
         case .pasteLast:
             guard let t = lastTranscript else { return false }
             insert(t.text)
+            return true
+        case .toggle:
+            if case .recording = phase { stopAndTranscribe(reason: "toggle shortcut") }
+            else if !isExcludedFrontApp() { startRecording(handsFree: true) }
             return true
         }
     }
@@ -405,7 +425,9 @@ final class AppState: ObservableObject {
         if prefs.smartSpacing { final = TextCleaner.adaptToContext(final, before: FocusInspector.textBeforeCursor()) }
         if prefs.addTrailingSpace, !final.hasSuffix("\n") { final += " " }
 
+        let caret = prefs.learnFromEdits && prefs.pasteMethod != .clipboard ? FocusInspector.caret() : nil
         let result = insert(final)
+        if let caret, result == .pasted { editLearner.watch(element: caret.0, location: caret.1, inserted: final) }
         let latency = Int(Date().timeIntervalSince(releasedAt) * 1000)
         Log.info("dictation: \(text.count) chars, \(latency) ms, by \(by), streamed \(chunks.count) chunks, app=\(target?.bundleIdentifier ?? "-")")
 
@@ -460,7 +482,8 @@ final class AppState: ObservableObject {
         var by = "Rules"
 
         let engine = activeEngine
-        if engine != .off, let polished = await polisher.polish(out, engine: engine, ollamaModel: prefs.ollamaModel) {
+        let examples = prefs.matchMyStyle ? personal.styleExamples(for: AppCategory.of(bundleID: bundleID), history: history.items) : []
+        if engine != .off, let polished = await polisher.polish(out, engine: engine, ollamaModel: prefs.ollamaModel, examples: examples) {
             out = polished
             by = engine == .apple ? "Apple Intelligence" : "Ollama"
         }
@@ -473,9 +496,28 @@ final class AppState: ObservableObject {
     }
 
     func whisperPrompt() -> String {
-        let terms = dictionary.items.map(\.vocabularyTerm).filter { !$0.isEmpty }
+        var terms = dictionary.items.map(\.vocabularyTerm).filter { !$0.isEmpty }
+        if prefs.learnVocabulary {
+            let have = Set(terms.map { $0.lowercased() })
+            terms += personal.profile.learnedWords.filter { !have.contains($0.lowercased()) }
+        }
         guard !terms.isEmpty else { return "" }
-        return Array(terms.prefix(40)).joined(separator: ", ") + "."
+        return Array(terms.prefix(48)).joined(separator: ", ") + "."
+    }
+
+    /// Called when the user fixes a word right after Fisper typed it.
+    private func learnCorrection(heard: String, fixed: String) {
+        guard prefs.learnFromEdits else { return }
+        if heard.lowercased() == fixed.lowercased() {
+            // casing fix ("iphone" → "iPhone"): remember the spelling
+            guard !dictionary.items.contains(where: { !$0.isCorrection && $0.word == fixed }) else { return }
+            dictionary.items.insert(DictEntry(word: fixed, learned: true), at: 0)
+        } else {
+            guard !dictionary.items.contains(where: { $0.word.lowercased() == heard.lowercased() }) else { return }
+            dictionary.items.insert(DictEntry(word: heard, replacement: fixed, learned: true), at: 0)
+        }
+        Log.info("learned correction: \(heard) → \(fixed)")
+        if case .idle = phase { showNotice("Learned “\(fixed)”", isError: false) }
     }
 
     // MARK: Diagnostics
@@ -487,7 +529,7 @@ final class AppState: ObservableObject {
             let url = FileManager.default.temporaryDirectory.appendingPathComponent("fisper-diag.aiff")
             let say = Process()
             say.executableURL = URL(fileURLWithPath: "/usr/bin/say")
-            say.arguments = ["-o", url.path, "Um, so I think we should meet on Tuesday, no wait, Wednesday at three."]
+            say.arguments = ["-o", url.path, "Um, can you book the the conference room for Thursday, actually no, make it Friday morning."]
             try? say.run(); say.waitUntilExit()
             guard let samples = AudioUtil.samples(fromWAV: url) else { diagnosticResult = "Couldn't generate test audio"; return }
             let t0 = Date()

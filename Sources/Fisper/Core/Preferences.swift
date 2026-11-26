@@ -1,33 +1,6 @@
 import Foundation
 import SwiftUI
 
-enum HotkeyChoice: String, CaseIterable, Identifiable, Codable {
-    case fn, rightOption, rightCommand, rightShift, rightControl, controlOption, optionCommand
-    var id: String { rawValue }
-    var title: String {
-        switch self {
-        case .fn: return "fn (Globe)"
-        case .rightOption: return "Right ⌥ Option"
-        case .rightCommand: return "Right ⌘ Command"
-        case .rightShift: return "Right ⇧ Shift"
-        case .rightControl: return "Right ⌃ Control"
-        case .controlOption: return "⌃ Control + ⌥ Option"
-        case .optionCommand: return "⌥ Option + ⌘ Command"
-        }
-    }
-    var keyLabel: String {
-        switch self {
-        case .fn: return "fn"
-        case .rightOption: return "right ⌥"
-        case .rightCommand: return "right ⌘"
-        case .rightShift: return "right ⇧"
-        case .rightControl: return "right ⌃"
-        case .controlOption: return "⌃⌥"
-        case .optionCommand: return "⌥⌘"
-        }
-    }
-}
-
 enum PolishEngine: String, CaseIterable, Identifiable, Codable {
     case auto, apple, ollama, off
     var id: String { rawValue }
@@ -105,12 +78,33 @@ enum BarStyle: String, CaseIterable, Identifiable, Codable {
     var title: String { self == .glass ? "Liquid Glass" : "Midnight" }
 }
 
+/// A color that can be stored in UserDefaults.
+struct RGBAColor: Codable, Equatable, Hashable {
+    var r: Double, g: Double, b: Double, a: Double = 1
+    var color: Color { Color(.sRGB, red: r, green: g, blue: b, opacity: a) }
+    init(r: Double, g: Double, b: Double, a: Double = 1) { self.r = r; self.g = g; self.b = b; self.a = a }
+    init(_ c: Color) {
+        let n = NSColor(c).usingColorSpace(.sRGB) ?? .black
+        r = Double(n.redComponent); g = Double(n.greenComponent); b = Double(n.blueComponent); a = Double(n.alphaComponent)
+    }
+    static let midnight = RGBAColor(r: 0.043, g: 0.043, b: 0.047)
+    static let white = RGBAColor(r: 1, g: 1, b: 1)
+    static let forest = RGBAColor(r: 0.059, g: 0.42, b: 0.36)
+}
+
+enum AppAppearance: String, CaseIterable, Identifiable, Codable {
+    case system, light, dark
+    var id: String { rawValue }
+    var title: String { rawValue.capitalized }
+}
+
 enum AccentChoice: String, CaseIterable, Identifiable, Codable {
-    case forest, system, blue, purple, pink, orange, graphite
+    case forest, system, blue, purple, pink, orange, graphite, custom
     var id: String { rawValue }
     var title: String { rawValue == "system" ? "System" : rawValue.capitalized }
-    var color: Color {
+    @MainActor var color: Color {
         switch self {
+        case .custom: return Preferences.shared.customAccent.color
         case .forest: return Color(hex: 0x0F6B5C)
         case .system: return .accentColor
         case .blue: return Color(hex: 0x0A84FF)
@@ -178,7 +172,9 @@ final class Preferences: ObservableObject {
     private let d = UserDefaults.standard
 
     // Shortcut & behaviour
-    @Published var hotkey: HotkeyChoice { didSet { save(hotkey.rawValue, "hotkey") } }
+    @Published var hotkey: Shortcut { didSet { saveShortcut(hotkey, "shortcut") } }
+    @Published var pasteLastShortcut: Shortcut? { didSet { saveShortcut(pasteLastShortcut, "pasteLastShortcut") } }
+    @Published var toggleShortcut: Shortcut? { didSet { saveShortcut(toggleShortcut, "toggleShortcut") } }
     @Published var doubleTapHandsFree: Bool { didSet { save(doubleTapHandsFree, "doubleTapHandsFree") } }
     @Published var spaceLocksHandsFree: Bool { didSet { save(spaceLocksHandsFree, "spaceLocksHandsFree") } }
     @Published var minHoldSeconds: Double { didSet { save(minHoldSeconds, "minHoldSeconds") } }
@@ -220,8 +216,24 @@ final class Preferences: ObservableObject {
 
     // Appearance & sound
     @Published var accent: AccentChoice { didSet { save(accent.rawValue, "accent") } }
+    @Published var customAccent: RGBAColor { didSet { saveCodable(customAccent, "customAccent") } }
+    @Published var appearance: AppAppearance { didSet { save(appearance.rawValue, "appearance"); applyAppearance() } }
+    @Published var barColor: RGBAColor { didSet { saveCodable(barColor, "barColor") } }
+    @Published var waveColor: RGBAColor { didSet { saveCodable(waveColor, "waveColor") } }
+    @Published var barOpacity: Double { didSet { save(barOpacity, "barOpacity") } }
+
+    // Personalization
+    @Published var learnFromEdits: Bool { didSet { save(learnFromEdits, "learnFromEdits") } }
+    @Published var learnVocabulary: Bool { didSet { save(learnVocabulary, "learnVocabulary") } }
+    @Published var matchMyStyle: Bool { didSet { save(matchMyStyle, "matchMyStyle") } }
     @Published var showIdleBar: Bool { didSet { save(showIdleBar, "showIdleBar") } }
     @Published var barPosition: BarPosition { didSet { save(barPosition.rawValue, "barPosition") } }
+    /// Where the user dragged the flow bar, as fractions of the screen's visible frame (center point). nil = preset position.
+    @Published var barCustomPosition: CGPoint? {
+        didSet {
+            if let p = barCustomPosition { save([p.x, p.y], "barCustomPosition") } else { d.removeObject(forKey: "barCustomPosition") }
+        }
+    }
     @Published var barStyle: BarStyle { didSet { save(barStyle.rawValue, "barStyle") } }
     @Published var barScale: Double { didSet { save(barScale, "barScale") } }
     @Published var playSounds: Bool { didSet { save(playSounds, "playSounds") } }
@@ -235,12 +247,34 @@ final class Preferences: ObservableObject {
     @Published var onboarded: Bool { didSet { save(onboarded, "onboarded") } }
 
     private func save(_ v: Any, _ k: String) { d.set(v, forKey: k) }
+    private func saveCodable<T: Encodable>(_ v: T, _ k: String) { if let data = try? JSONEncoder().encode(v) { d.set(data, forKey: k) } }
+    private static func loadCodable<T: Decodable>(_ d: UserDefaults, _ k: String) -> T? {
+        guard let data = d.data(forKey: k) else { return nil }
+        return try? JSONDecoder().decode(T.self, from: data)
+    }
+    func applyAppearance() {
+        switch appearance {
+        case .system: NSApp?.appearance = nil
+        case .light: NSApp?.appearance = NSAppearance(named: .aqua)
+        case .dark: NSApp?.appearance = NSAppearance(named: .darkAqua)
+        }
+    }
+    private func saveShortcut(_ s: Shortcut?, _ k: String) {
+        if let s, let data = try? JSONEncoder().encode(s) { d.set(data, forKey: k) } else { d.set(Data(), forKey: k) }
+    }
+    private static func loadShortcut(_ d: UserDefaults, _ k: String) -> Shortcut?? {
+        guard let data = d.data(forKey: k) else { return nil }          // never set
+        if data.isEmpty { return .some(nil) }                            // explicitly disabled
+        return .some(try? JSONDecoder().decode(Shortcut.self, from: data))
+    }
     private func bool(_ k: String, _ def: Bool) -> Bool { d.object(forKey: k) as? Bool ?? def }
     private func double(_ k: String, _ def: Double) -> Double { d.object(forKey: k) as? Double ?? def }
     private func str(_ k: String) -> String { d.string(forKey: k) ?? "" }
 
     private init() {
-        hotkey = HotkeyChoice(rawValue: d.string(forKey: "hotkey") ?? "") ?? .fn
+        hotkey = (Self.loadShortcut(d, "shortcut") ?? nil) ?? Shortcut.legacy(d.string(forKey: "hotkey") ?? "") ?? .fnKey
+        pasteLastShortcut = Self.loadShortcut(d, "pasteLastShortcut") ?? .defaultPasteLast
+        toggleShortcut = Self.loadShortcut(d, "toggleShortcut") ?? nil
         doubleTapHandsFree = d.object(forKey: "doubleTapHandsFree") as? Bool ?? true
         spaceLocksHandsFree = d.object(forKey: "spaceLocksHandsFree") as? Bool ?? true
         minHoldSeconds = d.object(forKey: "minHoldSeconds") as? Double ?? 0.28
@@ -279,8 +313,17 @@ final class Preferences: ObservableObject {
         styles = s
 
         accent = AccentChoice(rawValue: d.string(forKey: "accent") ?? "") ?? .forest
+        customAccent = Self.loadCodable(d, "customAccent") ?? .forest
+        appearance = AppAppearance(rawValue: d.string(forKey: "appearance") ?? "") ?? .system
+        barColor = Self.loadCodable(d, "barColor") ?? .midnight
+        waveColor = Self.loadCodable(d, "waveColor") ?? .white
+        barOpacity = d.object(forKey: "barOpacity") as? Double ?? 0.82
+        learnFromEdits = d.object(forKey: "learnFromEdits") as? Bool ?? true
+        learnVocabulary = d.object(forKey: "learnVocabulary") as? Bool ?? true
+        matchMyStyle = d.object(forKey: "matchMyStyle") as? Bool ?? true
         showIdleBar = d.object(forKey: "showIdleBar") as? Bool ?? true
         barPosition = BarPosition(rawValue: d.string(forKey: "barPosition") ?? "") ?? .bottom
+        if let a = d.array(forKey: "barCustomPosition") as? [Double], a.count == 2 { barCustomPosition = CGPoint(x: a[0], y: a[1]) }
         barStyle = BarStyle(rawValue: d.string(forKey: "barStyle") ?? "") ?? .glass
         barScale = d.object(forKey: "barScale") as? Double ?? 1.0
         playSounds = d.object(forKey: "playSounds") as? Bool ?? true

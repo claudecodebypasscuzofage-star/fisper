@@ -11,9 +11,14 @@ struct MainView: View {
             }
             .navigationSplitViewColumnWidth(min: 210, ideal: 226, max: 280)
         } detail: {
-            page
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Theme.canvas)
+            ZStack {
+                page
+                    .id(state.selectedPage)
+                    .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 8)), removal: .opacity))
+            }
+            .animation(.spring(response: 0.32, dampingFraction: 0.9), value: state.selectedPage)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Theme.canvas)
         }
         .navigationSplitViewStyle(.balanced)
         .tint(prefs.accent.color)

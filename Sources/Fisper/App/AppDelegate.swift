@@ -21,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
 
         NSApp.setActivationPolicy(.regular)
+        state.prefs.applyAppearance()
         buildMainMenu()
         setupStatusItem()
         state.boot()

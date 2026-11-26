@@ -119,23 +119,31 @@ struct OnboardingView: View {
             Text("Your dictation key").font(Theme.serif(30))
             Text("Hold it anywhere to talk, release to paste. Double-tap for hands-free.").font(.system(size: 13.5)).foregroundStyle(Theme.text2)
             VStack(spacing: 8) {
-                ForEach(HotkeyChoice.allCases) { h in
+                ForEach(Array(Shortcut.presets.prefix(4)), id: \.self) { h in
+                    let on = prefs.hotkey.sameKeys(h)
                     Button { prefs.hotkey = h } label: {
                         HStack {
                             Text(h.title).font(.system(size: 13.5, weight: .medium))
                             Spacer()
-                            Image(systemName: prefs.hotkey == h ? "checkmark.circle.fill" : "circle")
-                                .foregroundStyle(prefs.hotkey == h ? Theme.forest : Theme.text3)
+                            Image(systemName: on ? "checkmark.circle.fill" : "circle").foregroundStyle(on ? Theme.forest : Theme.text3)
                         }
                         .padding(12)
                         .background(RoundedRectangle(cornerRadius: 10).fill(Theme.card))
-                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(prefs.hotkey == h ? Theme.forest : Theme.border, lineWidth: prefs.hotkey == h ? 1.5 : 1))
+                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(on ? Theme.forest : Theme.border, lineWidth: on ? 1.5 : 1))
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 }
+                HStack {
+                    Text("Or pick your own keys").font(.system(size: 13.5, weight: .medium))
+                    Spacer()
+                    ShortcutField(required: $prefs.hotkey)
+                }
+                .padding(12)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Theme.card))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Shortcut.presets.prefix(4).contains { prefs.hotkey.sameKeys($0) } ? Theme.border : Theme.forest))
             }
-            if prefs.hotkey == .fn {
+            if prefs.hotkey.isFn {
                 InfoNote(text: "So the emoji picker doesn't pop up: System Settings → Keyboard → “Press 🌐 key to” → Do Nothing.",
                          button: "Open") { Permissions.openKeyboardSettings() }
             }

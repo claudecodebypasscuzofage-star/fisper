@@ -59,11 +59,20 @@ cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 printf "APPL????" > "$APP/Contents/PkgInfo"
 
-# 5. Sign (ad-hoc). Note: macOS ties Accessibility permission to the signature,
-#    so after rebuilding you may need to toggle Fisper off/on in Privacy & Security → Accessibility.
-say "Signing"
-codesign --force --sign - --identifier app.fisper.whisper-server "$APP/Contents/MacOS/whisper-server"
-codesign --force --sign - --identifier app.fisper.Fisper "$APP"
+# 5. Sign. Uses the local identity from scripts/make_signing_cert.sh when present, so macOS keeps your
+#    Microphone/Accessibility permissions across rebuilds. Falls back to ad-hoc signing.
+SIGN_KC="$HOME/Library/Keychains/fisper-signing.keychain-db"
+SIGN_ID="Fisper Local Code Signing"
+if [[ "${FISPER_ADHOC:-0}" != "1" ]] && security find-identity -p codesigning "$SIGN_KC" 2>/dev/null | grep -q "$SIGN_ID"; then
+  say "Signing with '$SIGN_ID' (permissions persist across builds)"
+  security unlock-keychain -p fisper-local-signing "$SIGN_KC"
+  SIGN=(--keychain "$SIGN_KC" --sign "$SIGN_ID")
+else
+  say "Signing ad-hoc (run scripts/make_signing_cert.sh once to keep permissions across rebuilds)"
+  SIGN=(--sign -)
+fi
+codesign --force "${SIGN[@]}" --identifier app.fisper.whisper-server "$APP/Contents/MacOS/whisper-server"
+codesign --force "${SIGN[@]}" --identifier app.fisper.Fisper "$APP"
 codesign --verify --deep "$APP"
 
 say "Built $APP"
