@@ -9,6 +9,10 @@ enum TextCleaner {
         "thank you", "thank you.", "thanks for watching", "thanks for watching!", "thank you for watching", "thank you for watching.",
         "you", "you.", "bye", "bye.", "bye!", "okay.", "so", "the end", "subscribe", "please subscribe", ".", "uh", "um", "hmm",
         "thanks.", "thank you so much.", "i'm sorry.", "music", "applause", "silence",
+        "thanks for watching and see you next time", "please like and subscribe", "see you next time",
+        "gracias por ver el video", "gracias por ver", "subtítulos realizados por la comunidad de amaraorg",
+        "sous-titres réalisés para la communauté damaraorg", "untertitel der amaraorg-community", "untertitel im auftrag des zdf",
+        "продолжение следует", "субтитры сделал dimatorzok", "ご視聴ありがとうございました",
     ]
 
     static func stripNoise(_ text: String) -> String {
@@ -24,6 +28,10 @@ enum TextCleaner {
     static func isLikelyHallucination(_ text: String, voicedSeconds: Double) -> Bool {
         let n = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
         if n.isEmpty { return true }
+        // classic subtitle-credit hallucinations are never real dictation, regardless of length
+        let squashed = n.replacingOccurrences(of: ".", with: "")
+        if ["amaraorg", "subtítulos", "sous-titres", "untertitel", "субтитры", "ご視聴"].contains(where: { squashed.contains($0) }) { return true }
+        if voicedSeconds < 2.5 && hallucinations.contains(squashed) { return true }
         if voicedSeconds < 1.2 && hallucinations.contains(n) { return true }
         if voicedSeconds < 1.2 && hallucinations.contains(n + ".") { return true }
         return false

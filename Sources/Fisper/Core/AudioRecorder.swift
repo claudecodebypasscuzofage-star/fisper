@@ -171,6 +171,15 @@ final class AudioRecorder {
 
     var elapsed: TimeInterval { isRecording ? Date().timeIntervalSince(startedAt) : 0 }
 
+    /// Number of 16 kHz samples captured so far (thread-safe) — used for streaming transcription.
+    var sampleCount: Int { lock.lock(); defer { lock.unlock() }; return samples.count }
+
+    func copySamples(_ range: Range<Int>) -> [Float] {
+        lock.lock(); defer { lock.unlock() }
+        let r = max(0, range.lowerBound)..<min(samples.count, range.upperBound)
+        return r.isEmpty ? [] : Array(samples[r])
+    }
+
     /// Stops and returns the captured 16 kHz samples.
     @discardableResult
     func stop() -> [Float] {
@@ -209,7 +218,8 @@ enum AudioUtil {
         }
         let sorted = energies.sorted()
         let floor = sorted[Int(Double(sorted.count) * 0.2)]
-        let threshold = max(0.006, floor * 2.5)
+        let speechLevel = sorted[Int(Double(sorted.count - 1) * 0.9)]
+        let threshold = max(0.006, min(floor * 2.5, speechLevel * 0.3))
         voicedWindows = energies.filter { $0 > threshold }.count
         return (peak, Double(voicedWindows * win) / AudioRecorder.sampleRate)
     }
@@ -228,13 +238,36 @@ enum AudioUtil {
         }
         let sorted = energies.sorted()
         let floor = sorted[Int(Double(sorted.count) * 0.2)]
-        let threshold = max(0.008, floor * 3)
+        let speechLevel = sorted[Int(Double(sorted.count - 1) * 0.9)]
+        let threshold = max(0.008, min(floor * 3, speechLevel * 0.25))
         guard let first = energies.firstIndex(where: { $0 > threshold }),
               let last = energies.lastIndex(where: { $0 > threshold }) else { return s }
         let padSamples = Int(pad * AudioRecorder.sampleRate)
         let start = max(0, first * win - padSamples)
         let end = min(s.count, (last + 1) * win + padSamples)
         return Array(s[start..<end])
+    }
+
+    /// Index of the quietest 300 ms stretch inside `s` (searching the last `searchSeconds`), or nil if nothing is quiet.
+    static func quietSplitPoint(_ s: [Float], searchSeconds: Double = 4) -> Int? {
+        let win = 480, need = 10 // 10 x 30 ms
+        let start = max(0, s.count - Int(searchSeconds * AudioRecorder.sampleRate))
+        var energies: [Float] = []
+        var i = start
+        while i + win <= s.count {
+            var sum: Float = 0
+            for j in i..<(i + win) { sum += s[j] * s[j] }
+            energies.append(sqrtf(sum / Float(win))); i += win
+        }
+        guard energies.count > need else { return nil }
+        let speech = energies.sorted()[energies.count * 9 / 10]
+        var best: (idx: Int, e: Float)? = nil
+        for k in 0...(energies.count - need) {
+            let e = energies[k..<(k + need)].reduce(0, +) / Float(need)
+            if best == nil || e < best!.e { best = (k, e) }
+        }
+        guard let b = best, b.e < max(0.01, speech * 0.2) else { return nil }
+        return start + (b.idx + need / 2) * win
     }
 
     /// Whisper sometimes drops the final word if audio ends abruptly — add a short silence tail.

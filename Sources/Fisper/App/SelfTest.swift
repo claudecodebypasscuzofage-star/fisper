@@ -21,19 +21,26 @@ enum SelfTest {
             try? await Task.sleep(nanoseconds: 1_500_000_000) // let Ollama/Apple availability resolve
             let engine = state.polisher.resolvedEngine(state.prefs.polishEngine, ollamaModel: state.prefs.ollamaModel)
             print("AI polish: \(engine.title) · apple=\(state.polisher.appleStatus) · ollama=\(state.polisher.ollamaModels)")
+            state.polisher.config = AIPolisher.Config(level: state.prefs.correctionLevel, lists: state.prefs.formatLists, digits: state.prefs.numbersAsDigits, custom: state.prefs.customInstructions)
             state.polisher.prewarm(engine, ollamaModel: state.prefs.ollamaModel)
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
             for f in files {
                 guard let samples = AudioUtil.samples(fromWAV: URL(fileURLWithPath: f)) else { print("✗ cannot read \(f)"); continue }
-                let a = AudioUtil.analyze(samples)
+                let opts = state.prefs.enhancerOptions
+                let e0 = Date()
+                let (enhanced, rep) = AudioEnhancer.processWithReport(samples, options: opts)
+                let enhanceMs = Int(Date().timeIntervalSince(e0) * 1000)
+                let a = AudioUtil.analyze(enhanced)
                 let s0 = Date()
                 do {
-                    let raw = try await state.whisper.transcribe(samples: AudioUtil.prepared(samples), language: state.prefs.language, prompt: "")
+                    let raw = try await state.whisper.transcribe(samples: AudioUtil.prepared(enhanced), language: state.prefs.language, prompt: state.whisperPrompt(), fast: state.prefs.fastMode)
                     let s1 = Date()
                     let (final, by) = await state.pipeline(raw: raw, voiced: a.voicedSeconds, bundleID: nil)
                     let s2 = Date()
                     print("\n▶ \((f as NSString).lastPathComponent)  (\(String(format: "%.1f", Double(samples.count) / 16000))s audio, voiced \(String(format: "%.1f", a.voicedSeconds))s)")
                     print("  raw   : \(raw)")
                     print("  final : \(final.replacingOccurrences(of: "\n", with: "⏎"))")
+                    print(String(format: "  audio : SNR %.0f dB · isolated %@ · gain %+.0f dB · %d ms", rep.snrDB, rep.isolated ? "yes" : "no", rep.gainDB, enhanceMs))
                     print(String(format: "  timing: whisper %.0f ms · cleanup %.0f ms (%@)", s1.timeIntervalSince(s0) * 1000, s2.timeIntervalSince(s1) * 1000, by))
                 } catch {
                     print("✗ \(f): \(error.localizedDescription)")

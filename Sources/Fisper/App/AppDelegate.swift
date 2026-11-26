@@ -3,7 +3,7 @@ import SwiftUI
 import Combine
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let state = AppState.shared
     private var window: NSWindow?
     private var statusItem: NSStatusItem!
@@ -53,8 +53,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                              backing: .buffered, defer: false)
             w.titlebarAppearsTransparent = true
             w.titleVisibility = .hidden
+            let tb = NSToolbar(identifier: "FisperMain")
+            tb.showsBaselineSeparator = false
+            w.toolbar = tb
+            w.toolbarStyle = .unified
             w.title = "Fisper"
-            w.isMovableByWindowBackground = true
+            w.isMovableByWindowBackground = false
             w.minSize = NSSize(width: 860, height: 580)
             w.isReleasedWhenClosed = false
             w.delegate = self
@@ -73,14 +77,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         DispatchQueue.main.async { NSApp.setActivationPolicy(.accessory) }
     }
 
-    // MARK: Status item
+    // MARK: Status item + popover
+
+    private var popover: NSPopover?
 
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         updateStatusIcon(.idle)
-        let menu = NSMenu()
-        menu.delegate = self
-        statusItem.menu = menu
+        statusItem.button?.target = self
+        statusItem.button?.action = #selector(togglePopover(_:))
+        statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        statusItem.isVisible = state.prefs.showMenuBarIcon
+        state.prefs.$showMenuBarIcon.sink { [weak self] v in self?.statusItem.isVisible = v }.store(in: &bag)
+    }
+
+    @objc private func togglePopover(_ sender: Any?) {
+        if let p = popover, p.isShown { p.performClose(nil); return }
+        let p = NSPopover()
+        p.behavior = .transient
+        p.animates = true
+        let view = MenuBarPanel(openWindow: { [weak self] page in
+            if let page { self?.state.selectedPage = page }
+            self?.popover?.performClose(nil)
+            self?.showWindow()
+        }, quit: { NSApp.terminate(nil) })
+            .environmentObject(state).environmentObject(state.prefs)
+        let host = NSHostingController(rootView: view)
+        host.sizingOptions = [.preferredContentSize]
+        p.contentViewController = host
+        popover = p
+        if let button = statusItem.button { p.show(relativeTo: button.bounds, of: button, preferredEdge: .minY) }
+        p.contentViewController?.view.window?.makeKey()
     }
 
     private func updateStatusIcon(_ phase: AppState.Phase) {
@@ -95,71 +122,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         statusItem?.button?.image = img
     }
 
-    func menuNeedsUpdate(_ menu: NSMenu) {
-        menu.removeAllItems()
-        let status: String
-        switch state.whisper.state {
-        case .ready: status = state.accessibilityGranted ? "Ready — hold \(state.prefs.hotkey.keyLabel) to dictate" : "Needs Accessibility permission"
-        case .starting: status = "Starting speech engine…"
-        case .missingModel: status = "Download a speech model in Settings"
-        case .failed(let m): status = m
-        case .stopped: status = "Speech engine stopped"
-        }
-        let head = NSMenuItem(title: status, action: nil, keyEquivalent: ""); head.isEnabled = false
-        menu.addItem(head)
-        menu.addItem(.separator())
-        menu.addItem(item("Open Fisper", #selector(openWindow), "o"))
-        let hands = item("Start Hands-free Dictation", #selector(toggleHandsFree), "")
-        if case .recording = state.phase { hands.title = "Finish Dictation" }
-        menu.addItem(hands)
-        let paste = item("Paste Last Transcript", #selector(pasteLast), "v")
-        paste.keyEquivalentModifierMask = [.control, .command]
-        paste.isEnabled = state.lastTranscript != nil
-        menu.addItem(paste)
-        menu.addItem(.separator())
-
-        let micMenu = NSMenu()
-        let def = NSMenuItem(title: "System Default", action: #selector(selectMic(_:)), keyEquivalent: "")
-        def.target = self; def.representedObject = ""; def.state = state.prefs.microphoneUID.isEmpty ? .on : .off
-        micMenu.addItem(def)
-        for d in AudioDevices.inputDevices() {
-            let m = NSMenuItem(title: d.name, action: #selector(selectMic(_:)), keyEquivalent: "")
-            m.target = self; m.representedObject = d.uid; m.state = state.prefs.microphoneUID == d.uid ? .on : .off
-            micMenu.addItem(m)
-        }
-        let micItem = NSMenuItem(title: "Microphone", action: nil, keyEquivalent: ""); micItem.submenu = micMenu
-        menu.addItem(micItem)
-
-        let keyMenu = NSMenu()
-        for h in HotkeyChoice.allCases {
-            let m = NSMenuItem(title: h.title, action: #selector(selectHotkey(_:)), keyEquivalent: "")
-            m.target = self; m.representedObject = h.rawValue; m.state = state.prefs.hotkey == h ? .on : .off
-            keyMenu.addItem(m)
-        }
-        let keyItem = NSMenuItem(title: "Shortcut", action: nil, keyEquivalent: ""); keyItem.submenu = keyMenu
-        menu.addItem(keyItem)
-
-        menu.addItem(.separator())
-        menu.addItem(item("Settings…", #selector(openSettings), ","))
-        menu.addItem(item("Quit Fisper", #selector(quit), "q"))
-    }
-
-    private func item(_ title: String, _ sel: Selector, _ key: String) -> NSMenuItem {
-        let i = NSMenuItem(title: title, action: sel, keyEquivalent: key); i.target = self; return i
-    }
-
-    @objc private func openWindow() { showWindow() }
-    @objc private func openSettings() { state.selectedPage = .settings; showWindow() }
-    @objc private func toggleHandsFree() { state.toggleHandsFree() }
-    @objc private func pasteLast() {
-        guard let t = state.lastTranscript else { return }
-        _ = Paster.insert(t.text, restoreClipboard: state.prefs.restoreClipboard)
-    }
-    @objc private func selectMic(_ sender: NSMenuItem) { state.prefs.microphoneUID = sender.representedObject as? String ?? "" }
-    @objc private func selectHotkey(_ sender: NSMenuItem) {
-        if let h = HotkeyChoice(rawValue: sender.representedObject as? String ?? "") { state.prefs.hotkey = h }
-    }
-    @objc private func quit() { NSApp.terminate(nil) }
+    @objc private func openSettings() { state.selectedPage = .general; showWindow() }
 
     // MARK: Main menu (for ⌘Q, ⌘W, copy/paste in text fields)
 

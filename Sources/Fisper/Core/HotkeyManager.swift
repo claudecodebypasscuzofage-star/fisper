@@ -64,6 +64,8 @@ final class HotkeyManager {
     // Device-dependent modifier bits (IOLLEvent.h)
     private static let rightOptionBit: UInt64 = 0x40
     private static let rightCommandBit: UInt64 = 0x10
+    private static let rightShiftBit: UInt64 = 0x04
+    private static let rightControlBit: UInt64 = 0x2000
 
     fileprivate func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
@@ -110,7 +112,10 @@ final class HotkeyManager {
         case .fn: return flags.contains(.maskSecondaryFn)
         case .rightOption: return flags.rawValue & Self.rightOptionBit != 0
         case .rightCommand: return flags.rawValue & Self.rightCommandBit != 0
+        case .rightShift: return flags.rawValue & Self.rightShiftBit != 0
+        case .rightControl: return flags.rawValue & Self.rightControlBit != 0
         case .controlOption: return flags.contains(.maskControl) && flags.contains(.maskAlternate)
+        case .optionCommand: return flags.contains(.maskAlternate) && flags.contains(.maskCommand)
         }
     }
 
@@ -120,7 +125,10 @@ final class HotkeyManager {
         case .fn: break
         case .rightOption: others.remove(.maskAlternate)
         case .rightCommand: others.remove(.maskCommand)
+        case .rightShift: others.remove(.maskShift)
+        case .rightControl: others.remove(.maskControl)
         case .controlOption: others.remove(.maskControl); others.remove(.maskAlternate)
+        case .optionCommand: others.remove(.maskAlternate); others.remove(.maskCommand)
         }
         return flags.intersection(others).isEmpty
     }

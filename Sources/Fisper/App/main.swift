@@ -4,7 +4,16 @@ import Cocoa
 //   Fisper --selftest a.wav [b.wav …]      transcribe + clean files and print the results
 //   Fisper --render-ui <dir>               render every screen to PNGs
 let args = CommandLine.arguments
-if let i = args.firstIndex(of: "--selftest") {
+if let i = args.firstIndex(of: "--enhance"), i + 2 < args.count {
+    // Fisper --enhance in.wav out.wav [off|light|auto|always]
+    let mode = NoiseMode(rawValue: i + 3 < args.count ? args[i + 3] : "auto") ?? .auto
+    guard let s = AudioUtil.samples(fromWAV: URL(fileURLWithPath: args[i + 1])) else { print("cannot read"); exit(1) }
+    let t0 = Date()
+    let (out, r) = AudioEnhancer.processWithReport(s, options: .init(noise: mode))
+    try? AudioUtil.wavData(out).write(to: URL(fileURLWithPath: args[i + 2]))
+    print(String(format: "enhanced %.1fs in %.0f ms · SNR %.1f dB · isolated %@ · gain %+.1f dB", Double(s.count) / 16000, Date().timeIntervalSince(t0) * 1000, r.snrDB, r.isolated ? "yes" : "no", r.gainDB))
+    exit(0)
+} else if let i = args.firstIndex(of: "--selftest") {
     let files = Array(args.dropFirst(i + 1))
     MainActor.assumeIsolated { SelfTest.run(files: files) }
     RunLoop.main.run()

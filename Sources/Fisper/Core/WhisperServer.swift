@@ -171,10 +171,10 @@ final class WhisperServer: ObservableObject {
         // Adaptive encoder context: Whisper always encodes 30 s windows; shrinking the context for short clips is ~3x faster.
         var audioCtx = 0
         // Too tight a context makes Whisper loop ("Thanks. Thanks. Thanks.") — keep a generous margin.
+        // Measured: ≥ 2× the clip's frames (50/s) never looped; 1.6× sometimes did.
         if fast && duration < 20 {
-            let needed = Int(((duration * 1.5 + 6.0) * 50).rounded(.up))
-            audioCtx = (needed + 63) / 64 * 64
-            if audioCtx < 640 { audioCtx = 640 }
+            let needed = Int((duration * 50 * 2.0).rounded(.up))
+            audioCtx = (max(512, needed) + 63) / 64 * 64
             if audioCtx >= 1400 { audioCtx = 0 }
         }
 

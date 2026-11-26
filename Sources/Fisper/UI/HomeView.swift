@@ -5,15 +5,17 @@ struct HomeView: View {
     @EnvironmentObject var prefs: Preferences
     @State private var showHowTo = false
 
-    private var firstName: String {
-        Demo.firstName
+    private var greeting: String {
+        let h = Calendar.current.component(.hour, from: Date())
+        let part = h < 5 ? "Good evening" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening"
+        return "\(part), \(Demo.firstName)"
     }
 
     var body: some View {
         let stats = state.stats
         PageScroll {
             HStack(alignment: .center) {
-                Text("Welcome back, \(firstName)").font(.system(size: 22, weight: .semibold)).tracking(-0.3)
+                Text(greeting).font(.system(size: 26, weight: .bold)).tracking(-0.4)
                 Spacer()
                 StatsPill(streak: stats.streak, words: stats.totalWords, wpm: stats.wpm)
             }
@@ -58,25 +60,61 @@ struct HeroCard: View {
     @EnvironmentObject var prefs: Preferences
     @Binding var showHowTo: Bool
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            (Text("Hold ") + Text(prefs.hotkey.keyLabel).bold() + Text(" to dictate and let Fisper format for you"))
-                .font(Theme.serif(30))
-                .tracking(-0.4)
-                .fixedSize(horizontal: false, vertical: true)
-            (Text("Press and hold ") + Text(prefs.hotkey.keyLabel).bold() + Text(" in any app and just talk. Release to paste. Fisper removes filler words, fixes punctuation, formats lists and follows you when you change your mind mid-sentence. Double-tap or add ") + Text("space").bold() + Text(" for hands-free."))
-                .font(.system(size: 13.5))
-                .foregroundStyle(Theme.text2)
-                .lineSpacing(2)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 10) {
-                Button("Show me how") { showHowTo = true }.buttonStyle(PrimaryButton())
+        HStack(alignment: .center, spacing: 26) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Hold \(prefs.hotkey.keyLabel) and just talk.")
+                    .font(.system(size: 28, weight: .bold)).tracking(-0.5)
+                Text("Release to insert polished text wherever your cursor is. Fisper removes filler words, fixes grammar and follows you when you change your mind mid-sentence.")
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(Theme.text2)
+                    .lineSpacing(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 14) {
+                    Button("Show me how") { showHowTo = true }.buttonStyle(PrimaryButton())
+                    shortcut("Hands-free", [prefs.hotkey.keyLabel, prefs.hotkey.keyLabel])
+                    shortcut("Cancel", ["esc"])
+                    shortcut("Paste last", ["⌃", "⌘", "V"])
+                }
+                .padding(.top, 6)
             }
-            .padding(.top, 4)
+            Spacer(minLength: 0)
+            HeroGlyph().frame(width: 116, height: 116)
         }
-        .padding(24)
+        .padding(26)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.cream))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.creamBorder))
+        .background {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(LinearGradient(colors: [Theme.forest.opacity(0.16), Theme.forest.opacity(0.03)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Theme.card))
+        }
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Theme.forest.opacity(0.18)))
+    }
+
+    private func shortcut(_ label: String, _ keys: [String]) -> some View {
+        HStack(spacing: 4) {
+            ForEach(Array(keys.enumerated()), id: \.offset) { _, k in KeyCap(label: k, size: 10.5) }
+            Text(label).font(.system(size: 11.5)).foregroundStyle(Theme.text2).padding(.leading, 2)
+        }
+        .fixedSize()
+    }
+}
+
+/// Animated waveform orb on the home screen.
+struct HeroGlyph: View {
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1 / 30)) { ctx in
+            let t = ctx.date.timeIntervalSinceReferenceDate
+            ZStack {
+                Circle().fill(Theme.forest.gradient).shadow(color: Theme.forest.opacity(0.35), radius: 18, y: 8)
+                Circle().stroke(.white.opacity(0.25), lineWidth: 1).padding(6)
+                HStack(spacing: 5) {
+                    ForEach(0..<7, id: \.self) { i in
+                        let h = 0.35 + 0.55 * abs(sin(t * 1.6 + Double(i) * 0.75)) * (1 - abs(Double(i) - 3) / 5)
+                        Capsule().fill(.white).frame(width: 5, height: 70 * h)
+                    }
+                }
+            }
+        }
     }
 }
 

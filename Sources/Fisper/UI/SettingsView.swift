@@ -1,182 +1,182 @@
 import SwiftUI
 import AVFoundation
 
-struct SettingsView: View {
-    @EnvironmentObject var state: AppState
-    @EnvironmentObject var prefs: Preferences
-    @ObservedObject var models = AppState.shared.models
-    @State private var mics: [AudioInputDevice] = Demo.isOn ? [] : AudioDevices.inputDevices()
-    @State private var launchAtLogin = LoginItem.isEnabled
-    @State private var confirmClear = false
+// Native, System Settings–style grouped forms. Every page binds straight to Preferences, so changes apply instantly.
 
+private struct SettingsPage<Content: View>: View {
+    let title: String
+    let subtitle: String
+    let icon: String
+    @ViewBuilder var content: Content
     var body: some View {
-        PageScroll {
-            PageHeader(title: "Settings")
-
-            Section("General") {
-                SettingRow("Push-to-talk shortcut", detail: "Hold to talk. Double-tap, or add space, for hands-free.") {
-                    Picker("", selection: $prefs.hotkey) {
-                        ForEach(HotkeyChoice.allCases) { Text($0.title).tag($0) }
-                    }.labelsHidden().frame(width: 200)
-                }
-                if prefs.hotkey == .fn && Permissions.globeKeyUsage != 0 {
-                    InfoNote(text: "Your 🌐 key is set to open something when pressed. Set “Press 🌐 key to” → Do Nothing so it doesn't pop up while you dictate.",
-                             button: "Open Keyboard Settings") { Permissions.openKeyboardSettings() }
-                }
-                SettingToggle("Launch Fisper at login", isOn: $launchAtLogin)
-                    .onChange(of: launchAtLogin) { _, v in LoginItem.set(v) }
-                SettingToggle("Show the flow bar when idle", detail: "The little pill at the bottom of your screen.", isOn: $prefs.showIdleBar)
-                SettingToggle("Sound effects", isOn: $prefs.playSounds)
-                SettingToggle("Mute other audio while dictating", isOn: $prefs.muteWhileDictating)
-            }
-
-            Section("Microphone") {
-                SettingRow("Input", detail: "Current default: \(Demo.isOn ? "MacBook Pro Microphone" : AudioDevices.defaultInputName())") {
-                    Picker("", selection: $prefs.microphoneUID) {
-                        Text("System default").tag("")
-                        ForEach(mics) { Text($0.name).tag($0.uid) }
-                    }.labelsHidden().frame(width: 220)
-                }
-                .onAppear { if !Demo.isOn { mics = AudioDevices.inputDevices() } }
-            }
-
-            Section("Speech recognition") {
-                ForEach(WhisperModelInfo.all) { m in ModelRow(model: m, models: models) }
-                SettingRow("Language", detail: "Pick your language for best accuracy. Auto-detect works with Whisper Turbo.") {
-                    Picker("", selection: $prefs.language) {
-                        ForEach(supportedLanguages, id: \.code) { Text($0.name).tag($0.code) }
-                    }.labelsHidden().frame(width: 180)
-                }
-            }
-
-            Section("Auto-correct & formatting") {
-                SettingRow("AI clean-up", detail: aiDetail) {
-                    Picker("", selection: $prefs.polishEngine) {
-                        ForEach(PolishEngine.allCases) { Text($0.title).tag($0) }
-                    }.labelsHidden().frame(width: 240)
-                }
-                if prefs.polishEngine == .ollama || prefs.polishEngine == .auto {
-                    SettingRow("Ollama model", detail: state.polisher.ollamaAvailable ? "Installed: \(state.polisher.ollamaModels.joined(separator: ", "))" : "Ollama isn't running. Install from ollama.com, then run: ollama pull qwen2.5:3b") {
-                        TextField("qwen2.5:3b", text: $prefs.ollamaModel).textFieldStyle(.roundedBorder).frame(width: 180)
+        Form {
+            Section {
+                HStack(spacing: 14) {
+                    Image(systemName: icon)
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 42, height: 42)
+                        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.forest.gradient))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(title).font(.system(size: 20, weight: .bold))
+                        Text(subtitle).font(.system(size: 12.5)).foregroundStyle(Theme.text2)
                     }
-                }
-                SettingToggle("Remove filler words", detail: "um, uh, stutters and repeated words", isOn: $prefs.removeFillers)
-                SettingToggle("Voice commands", detail: "Say “new line” or “new paragraph”.", isOn: $prefs.voiceCommands)
-                SettingToggle("Smart spacing & capitalization", detail: "Looks at the text around your cursor.", isOn: $prefs.smartSpacing)
-                SettingToggle("Restore my clipboard after pasting", isOn: $prefs.restoreClipboard)
-            }
-
-            Section("Permissions") {
-                PermissionRow(title: "Microphone", granted: state.micStatus == .authorized) {
-                    if state.micStatus == .notDetermined { Permissions.requestMicrophone { _ in } } else { Permissions.openMicrophoneSettings() }
-                }
-                PermissionRow(title: "Accessibility (shortcut + paste)", granted: state.accessibilityGranted) {
-                    Permissions.promptAccessibility(); Permissions.openAccessibilitySettings()
-                }
-            }
-
-            Section("Data") {
-                SettingToggle("Keep recordings for “Transcribe again”", detail: "Last 50 dictations, stored only on this Mac.", isOn: $prefs.keepAudio)
-                HStack(spacing: 10) {
-                    Button("Open data folder") { NSWorkspace.shared.open(Paths.support) }.buttonStyle(SecondaryButton())
-                    Button("Clear history…") { confirmClear = true }.buttonStyle(SecondaryButton())
-                    Spacer()
                 }
                 .padding(.vertical, 4)
             }
-
-            Text("Fisper \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev") · open source · speech by whisper.cpp · runs 100% offline")
-                .font(.system(size: 11.5)).foregroundStyle(Theme.text3)
+            content
         }
-        .confirmationDialog("Delete all dictation history and saved recordings?", isPresented: $confirmClear) {
-            Button("Delete everything", role: .destructive) { state.clearHistory() }
-        } message: { Text("This can't be undone.") }
-    }
-
-    private var aiDetail: String {
-        let resolved = state.polisher.resolvedEngine(prefs.polishEngine, ollamaModel: prefs.ollamaModel)
-        let active: String
-        switch resolved {
-        case .apple: active = "Using Apple Intelligence (on-device)."
-        case .ollama: active = "Using Ollama · \(prefs.ollamaModel)."
-        default: active = "Using built-in rules only."
-        }
-        return "Fixes self-corrections, grammar and lists. \(active) Apple Intelligence: \(state.polisher.appleStatus)."
+        .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
+        .background(Theme.canvas)
     }
 }
 
-private struct Section<Content: View>: View {
-    let title: String
-    @ViewBuilder var content: Content
-    init(_ title: String, @ViewBuilder content: () -> Content) { self.title = title; self.content = content() }
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title.uppercased()).font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.text3).tracking(0.8)
-            VStack(alignment: .leading, spacing: 0) { content }
-                .padding(.horizontal, 16).padding(.vertical, 6)
-                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.card))
-                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.border))
-        }
-    }
-}
-
-struct SettingRow<Control: View>: View {
-    let title: String
-    var detail: String?
-    @ViewBuilder var control: Control
-    init(_ title: String, detail: String? = nil, @ViewBuilder control: () -> Control) {
-        self.title = title; self.detail = detail; self.control = control()
-    }
-    var body: some View {
-        HStack(alignment: .center, spacing: 16) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.system(size: 13.5))
-                if let detail { Text(detail).font(.system(size: 11.5)).foregroundStyle(Theme.text2).fixedSize(horizontal: false, vertical: true) }
-            }
-            Spacer(minLength: 8)
-            control
-        }
-        .padding(.vertical, 9)
-    }
-}
-
-struct SettingToggle: View {
-    let title: String
-    var detail: String?
-    @Binding var isOn: Bool
-    init(_ title: String, detail: String? = nil, isOn: Binding<Bool>) { self.title = title; self.detail = detail; self._isOn = isOn }
-    var body: some View {
-        SettingRow(title, detail: detail) { Toggle("", isOn: $isOn).toggleStyle(.switch).labelsHidden().controlSize(.small) }
-    }
-}
-
-struct InfoNote: View {
+private struct Hint: View {
     let text: String
-    var button: String?
-    var action: (() -> Void)?
+    var body: some View { Text(text).font(.system(size: 11.5)).foregroundStyle(Theme.text2).fixedSize(horizontal: false, vertical: true) }
+}
+
+// MARK: - General
+
+struct GeneralSettings: View {
+    @EnvironmentObject var prefs: Preferences
+    @State private var launchAtLogin = LoginItem.isEnabled
+
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "info.circle").foregroundStyle(Theme.forest)
-            Text(text).font(.system(size: 12)).foregroundStyle(Theme.text2).fixedSize(horizontal: false, vertical: true)
-            Spacer()
-            if let button, let action { Button(button, action: action).buttonStyle(SecondaryButton()) }
+        SettingsPage(title: "General", subtitle: "Your shortcut and how Fisper behaves.", icon: "gearshape.fill") {
+            Section("Shortcut") {
+                Picker("Hold to dictate", selection: $prefs.hotkey) {
+                    ForEach(HotkeyChoice.allCases) { Text($0.title).tag($0) }
+                }
+                if prefs.hotkey == .fn && Permissions.globeKeyUsage != 0 {
+                    LabeledContent {
+                        Button("Open Keyboard Settings") { Permissions.openKeyboardSettings() }
+                    } label: {
+                        Text("Set “Press 🌐 key to” → Do Nothing")
+                        Hint(text: "Otherwise macOS opens the emoji picker or Dictation when you tap fn.")
+                    }
+                }
+                Toggle(isOn: $prefs.doubleTapHandsFree) {
+                    Text("Double-tap for hands-free")
+                    Hint(text: "Tap \(prefs.hotkey.keyLabel) twice to keep recording without holding it.")
+                }
+                Toggle("\(prefs.hotkey.keyLabel) + Space locks hands-free", isOn: $prefs.spaceLocksHandsFree)
+                LabeledContent {
+                    Slider(value: $prefs.minHoldSeconds, in: 0.1...0.7, step: 0.05).frame(width: 180)
+                } label: {
+                    Text("Ignore taps shorter than \(String(format: "%.2f", prefs.minHoldSeconds)) s")
+                    Hint(text: "Prevents accidental recordings when you just brush the key.")
+                }
+                Stepper(value: $prefs.maxRecordingMinutes, in: 1...30, step: 1) {
+                    Text("Stop automatically after \(Int(prefs.maxRecordingMinutes)) min")
+                }
+            }
+            Section("App") {
+                Toggle("Launch Fisper at login", isOn: $launchAtLogin)
+                    .onChange(of: launchAtLogin) { _, v in LoginItem.set(v) }
+                Toggle("Show menu bar icon", isOn: $prefs.showMenuBarIcon)
+            }
+            Section {
+                ExcludedAppsEditor()
+            } header: {
+                Text("Don't listen in these apps")
+            } footer: {
+                Hint(text: "Useful for games or apps where you use \(prefs.hotkey.keyLabel) for something else.")
+            }
         }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.forestSoft.opacity(0.5)))
-        .padding(.vertical, 4)
     }
 }
 
-struct PermissionRow: View {
-    let title: String
-    let granted: Bool
-    let action: () -> Void
+struct ExcludedAppsEditor: View {
+    @EnvironmentObject var prefs: Preferences
     var body: some View {
-        SettingRow(title) {
-            if granted {
-                Label("Granted", systemImage: "checkmark.circle.fill").font(.system(size: 12.5, weight: .medium)).foregroundStyle(Color(hex: 0x2BB673))
-            } else {
-                Button("Grant access", action: action).buttonStyle(PrimaryButton())
+        if prefs.excludedApps.isEmpty {
+            Text("No apps excluded").foregroundStyle(Theme.text2)
+        }
+        ForEach(prefs.excludedApps, id: \.self) { bid in
+            HStack {
+                AppIcon(bundleID: bid).frame(width: 18, height: 18)
+                Text(appName(bid))
+                Spacer()
+                Button { prefs.excludedApps.removeAll { $0 == bid } } label: { Image(systemName: "minus.circle.fill") }
+                    .buttonStyle(.plain).foregroundStyle(Theme.text3)
+            }
+        }
+        Menu("Add app…") {
+            ForEach(runningApps, id: \.self) { bid in
+                Button(appName(bid)) { if !prefs.excludedApps.contains(bid) { prefs.excludedApps.append(bid) } }
+            }
+        }
+        .fixedSize()
+    }
+    private var runningApps: [String] {
+        NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular }
+            .compactMap(\.bundleIdentifier)
+            .filter { $0 != Bundle.main.bundleIdentifier && !prefs.excludedApps.contains($0) }
+            .sorted { appName($0) < appName($1) }
+    }
+    private func appName(_ bid: String) -> String {
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bid) {
+            return FileManager.default.displayName(atPath: url.path).replacingOccurrences(of: ".app", with: "")
+        }
+        return bid
+    }
+}
+
+struct AppIcon: View {
+    let bundleID: String
+    var body: some View {
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+            Image(nsImage: NSWorkspace.shared.icon(forFile: url.path)).resizable()
+        } else {
+            Image(systemName: "app")
+        }
+    }
+}
+
+// MARK: - Dictation
+
+struct DictationSettings: View {
+    @EnvironmentObject var state: AppState
+    @EnvironmentObject var prefs: Preferences
+    @ObservedObject var models = AppState.shared.models
+
+    var body: some View {
+        SettingsPage(title: "Dictation", subtitle: "Speech recognition and how text is inserted.", icon: "mic.fill") {
+            Section("Speech model") {
+                ForEach(WhisperModelInfo.all) { m in ModelRow(model: m, models: models) }
+            }
+            Section("Recognition") {
+                Picker("Language", selection: $prefs.language) {
+                    ForEach(supportedLanguages, id: \.code) { Text($0.name).tag($0.code) }
+                }
+                Toggle(isOn: $prefs.fastMode) {
+                    Text("Fast mode")
+                    Hint(text: "Sizes Whisper's context to your clip — about 3× faster on short dictations.")
+                }
+                Toggle(isOn: $prefs.streaming) {
+                    Text("Transcribe while you speak")
+                    Hint(text: "Long dictations are processed in the background as you talk, so they finish instantly.")
+                }
+            }
+            Section("Inserting text") {
+                Picker("Method", selection: $prefs.pasteMethod) {
+                    ForEach(PasteMethod.allCases) { Text($0.title).tag($0) }
+                }
+                if prefs.pasteMethod == .paste {
+                    Toggle("Restore my clipboard afterwards", isOn: $prefs.restoreClipboard)
+                }
+                Toggle(isOn: $prefs.smartSpacing) {
+                    Text("Smart spacing & capitalization")
+                    Hint(text: "Reads the text before your cursor to add a space or continue a sentence in lowercase.")
+                }
+                Toggle("Add a space after each dictation", isOn: $prefs.addTrailingSpace)
+                Toggle(isOn: $prefs.pressReturnAfter) {
+                    Text("Press Return after inserting")
+                    Hint(text: "Sends messages automatically in chat apps. Careful in documents.")
+                }
             }
         }
     }
@@ -192,7 +192,7 @@ struct ModelRow: View {
         let _ = models.revision
         let downloaded = model.isDownloaded
         let active = prefs.modelID == model.id
-        SettingRow(model.title, detail: "\(model.detail) · \(model.sizeMB) MB\(models.errors[model.id].map { " · ⚠︎ \($0)" } ?? "")") {
+        LabeledContent {
             if let p = models.progress[model.id] {
                 HStack(spacing: 8) {
                     ProgressView(value: p).frame(width: 110)
@@ -200,16 +200,343 @@ struct ModelRow: View {
                     Button { models.cancel(model.id) } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain).foregroundStyle(Theme.text3)
                 }
             } else if !downloaded {
-                Button("Download") { models.download(model) }.buttonStyle(SecondaryButton())
+                Button("Download") { models.download(model) }
             } else if active {
                 Label(state.whisper.state == .ready || Demo.isOn ? "In use" : "Loading…", systemImage: "checkmark.circle.fill")
-                    .font(.system(size: 12.5, weight: .medium)).foregroundStyle(Theme.forest)
+                    .foregroundStyle(Theme.forest)
             } else {
-                HStack(spacing: 6) {
-                    Button("Use") { prefs.modelID = model.id }.buttonStyle(SecondaryButton())
-                    Button { models.delete(model) } label: { Image(systemName: "trash") }.buttonStyle(.plain).foregroundStyle(Theme.text3)
+                HStack(spacing: 8) {
+                    Button("Use") { prefs.modelID = model.id }
+                    Button { models.delete(model) } label: { Image(systemName: "trash") }.buttonStyle(.borderless)
+                }
+            }
+        } label: {
+            Text(model.title)
+            Hint(text: "\(model.detail) · \(model.sizeMB) MB\(models.errors[model.id].map { " · ⚠︎ \($0)" } ?? "")")
+        }
+    }
+}
+
+// MARK: - Audio & noise
+
+struct AudioSettings: View {
+    @EnvironmentObject var state: AppState
+    @EnvironmentObject var prefs: Preferences
+    @State private var mics: [AudioInputDevice] = Demo.isOn ? [] : AudioDevices.inputDevices()
+
+    var body: some View {
+        SettingsPage(title: "Audio & Noise", subtitle: "Microphone, background-noise removal and quiet-speech boost.", icon: "waveform") {
+            Section("Microphone") {
+                Picker("Input", selection: $prefs.microphoneUID) {
+                    Text("System default (\(Demo.isOn ? "MacBook Pro Microphone" : AudioDevices.defaultInputName()))").tag("")
+                    ForEach(mics) { Text($0.name).tag($0.uid) }
+                }
+                .onAppear { if !Demo.isOn { mics = AudioDevices.inputDevices() } }
+                Toggle("Mute other audio while dictating", isOn: $prefs.muteWhileDictating)
+            }
+            Section {
+                Picker("Background noise", selection: $prefs.noiseMode) {
+                    ForEach(NoiseMode.allCases) { Text($0.title).tag($0) }
+                }
+                Hint(text: prefs.noiseMode.detail)
+                if prefs.noiseMode == .auto || prefs.noiseMode == .always {
+                    LabeledContent {
+                        Slider(value: $prefs.isolationStrength, in: 0.5...1.0, step: 0.05).frame(width: 180)
+                    } label: {
+                        Text("Isolation strength · \(Int(prefs.isolationStrength * 100))%")
+                        Hint(text: "85% measured best for accuracy. Higher removes more noise but can blur words.")
+                    }
+                }
+                Toggle(isOn: $prefs.boostQuietSpeech) {
+                    Text("Boost quiet & mumbled speech")
+                    Hint(text: "Evens out your volume so whispering or speaking far from the mic still works.")
+                }
+            } header: {
+                Text("Noise & clarity")
+            } footer: {
+                if !AudioEnhancer.isolationAvailable {
+                    Hint(text: "Voice isolation isn't available on this Mac; Fisper will use filtering only.")
+                }
+            }
+            if let r = state.lastAudioReport {
+                Section("Last dictation") {
+                    LabeledContent("Signal-to-noise", value: String(format: "%.0f dB · %@", r.snrDB, r.snrDB < AudioEnhancer.noisyThresholdDB ? "noisy room" : "clean"))
+                    LabeledContent("Voice isolation", value: r.isolated ? "Applied" : "Not needed")
+                    LabeledContent("Volume boost", value: String(format: "%+.0f dB", r.gainDB))
+                    LabeledContent("Processing time", value: "\(r.ms) ms")
                 }
             }
         }
+    }
+}
+
+// MARK: - Writing & AI
+
+struct WritingSettings: View {
+    @EnvironmentObject var state: AppState
+    @EnvironmentObject var prefs: Preferences
+
+    var body: some View {
+        SettingsPage(title: "Writing & AI", subtitle: "How much Fisper corrects, and the on-device model that does it.", icon: "wand.and.sparkles") {
+            Section("Auto-correct") {
+                Picker("Correction", selection: $prefs.correctionLevel) {
+                    ForEach(CorrectionLevel.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                Hint(text: prefs.correctionLevel.detail)
+                Toggle("Remove filler words (um, uh) and stutters", isOn: $prefs.removeFillers)
+                Toggle("Turn spoken lists into bullet points", isOn: $prefs.formatLists)
+                Toggle("Write numbers as digits", isOn: $prefs.numbersAsDigits)
+                Toggle(isOn: $prefs.voiceCommands) {
+                    Text("Voice commands")
+                    Hint(text: "Say “new line” or “new paragraph”.")
+                }
+            }
+            Section {
+                ZStack(alignment: .topLeading) {
+                    if prefs.customInstructions.isEmpty {
+                        Text("e.g. Use British spelling. Never use exclamation marks. Write “OK”, not “okay”. My company is spelled AcmeCo.")
+                            .foregroundStyle(Theme.text3).padding(.top, 1).padding(.leading, 5).allowsHitTesting(false)
+                    }
+                    TextEditor(text: $prefs.customInstructions)
+                        .scrollContentBackground(.hidden)
+                        .frame(minHeight: 70)
+                }
+                .font(.system(size: 13))
+            } header: {
+                Text("Your rules")
+            } footer: {
+                Hint(text: "Plain-English preferences the AI follows on every dictation. For names and spellings, the Dictionary is more reliable.")
+            }
+            Section("Engine") {
+                Picker("AI clean-up", selection: $prefs.polishEngine) {
+                    ForEach(PolishEngine.allCases) { Text($0.title).tag($0) }
+                }
+                LabeledContent("Active now", value: activeName)
+                LabeledContent("Apple Intelligence", value: state.polisher.appleStatus)
+                if state.polisher.ollamaAvailable {
+                    Picker("Ollama model", selection: $prefs.ollamaModel) {
+                        ForEach(state.polisher.ollamaModels, id: \.self) { Text($0).tag($0) }
+                        if !state.polisher.ollamaModels.contains(prefs.ollamaModel) { Text(prefs.ollamaModel).tag(prefs.ollamaModel) }
+                    }
+                } else {
+                    LabeledContent("Ollama", value: "Not running")
+                    Hint(text: "Optional. Install from ollama.com, then run “ollama pull qwen2.5:3b” for great results.")
+                }
+                Button("Refresh engines") { state.polisher.refreshAvailability() }
+            }
+        }
+    }
+
+    private var activeName: String {
+        switch state.activeEngine {
+        case .apple: return "Apple Intelligence"
+        case .ollama: return "Ollama · \(prefs.ollamaModel)"
+        default: return "Built-in rules"
+        }
+    }
+}
+
+// MARK: - Appearance
+
+struct AppearanceSettings: View {
+    @EnvironmentObject var prefs: Preferences
+
+    var body: some View {
+        SettingsPage(title: "Appearance", subtitle: "Colors, the flow bar and sounds.", icon: "paintpalette.fill") {
+            Section("Accent color") {
+                HStack(spacing: 14) {
+                    ForEach(AccentChoice.allCases) { a in
+                        Button { prefs.accent = a } label: {
+                            VStack(spacing: 5) {
+                                Circle()
+                                    .fill(a == .system ? AnyShapeStyle(AngularGradient(colors: [.red, .orange, .yellow, .green, .blue, .purple, .red], center: .center)) : AnyShapeStyle(a.color))
+                                    .frame(width: 24, height: 24)
+                                    .overlay(Circle().stroke(Color.primary.opacity(prefs.accent == a ? 0.85 : 0), lineWidth: 2).padding(-4))
+                                Text(a.title).font(.system(size: 10.5)).foregroundStyle(Theme.text2)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.vertical, 6)
+            }
+            Section("Flow bar") {
+                HStack {
+                    Spacer()
+                    BarPreview()
+                    Spacer()
+                }
+                .padding(.vertical, 8)
+                Picker("Style", selection: $prefs.barStyle) {
+                    ForEach(BarStyle.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                Picker("Position", selection: $prefs.barPosition) {
+                    ForEach(BarPosition.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                LabeledContent("Size") {
+                    Slider(value: $prefs.barScale, in: 0.8...1.4, step: 0.05).frame(width: 180)
+                }
+                Toggle("Show when idle", isOn: $prefs.showIdleBar)
+            }
+            Section("Sound") {
+                Toggle("Sound effects", isOn: $prefs.playSounds)
+                if prefs.playSounds {
+                    LabeledContent("Volume") {
+                        HStack {
+                            Slider(value: $prefs.soundVolume, in: 0.1...1.0).frame(width: 150)
+                            Button { Sounds.play("start") } label: { Image(systemName: "play.circle") }.buttonStyle(.borderless)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Live preview of the flow bar in the chosen style, over a colorful "desktop".
+struct BarPreview: View {
+    @EnvironmentObject var prefs: Preferences
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1 / 20)) { ctx in
+            let t = ctx.date.timeIntervalSinceReferenceDate
+            let levels = (0..<28).map { i in Float(0.3 + 0.6 * abs(sin(t * 3 + Double(i) * 0.5))) }
+            ZStack {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(LinearGradient(colors: [Color(hex: 0x7BA7D9), Color(hex: 0xC9A5E0), Color(hex: 0xF2C6A0)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .frame(width: 300, height: 86)
+                FlowPill(phase: .recording(handsFree: true), levels: levels, hovering: false, keyLabel: prefs.hotkey.keyLabel, style: prefs.barStyle)
+                    .scaleEffect(prefs.barScale)
+            }
+        }
+    }
+}
+
+// MARK: - Privacy
+
+struct PrivacySettings: View {
+    @EnvironmentObject var state: AppState
+    @EnvironmentObject var prefs: Preferences
+    @State private var confirmClear = false
+
+    var body: some View {
+        SettingsPage(title: "Privacy", subtitle: "Everything stays on this Mac. You decide what's kept.", icon: "hand.raised.fill") {
+            Section {
+                Label("Audio and text are processed on-device", systemImage: "checkmark.shield.fill")
+                Label("No account, no analytics, no cloud", systemImage: "icloud.slash")
+                Label("Network is only used to download models you choose", systemImage: "arrow.down.circle")
+            }
+            Section("History") {
+                Picker("Keep dictation history", selection: $prefs.retention) {
+                    ForEach(Retention.allCases) { Text($0.title).tag($0) }
+                }
+                .onChange(of: prefs.retention) { _, _ in state.applyRetention() }
+                Toggle(isOn: $prefs.keepAudio) {
+                    Text("Keep recordings for “Transcribe again”")
+                    Hint(text: "Only the latest 50, stored in Fisper's folder.")
+                }
+                HStack {
+                    Button("Show data folder") { NSWorkspace.shared.open(Paths.support) }
+                    Button("Delete all history…", role: .destructive) { confirmClear = true }
+                }
+            }
+        }
+        .confirmationDialog("Delete all dictation history and saved recordings?", isPresented: $confirmClear) {
+            Button("Delete everything", role: .destructive) { state.clearHistory() }
+        } message: { Text("This can't be undone.") }
+    }
+}
+
+// MARK: - Advanced
+
+struct AdvancedSettings: View {
+    @EnvironmentObject var state: AppState
+    @EnvironmentObject var prefs: Preferences
+    @State private var confirmReset = false
+
+    var body: some View {
+        SettingsPage(title: "Advanced", subtitle: "Permissions, diagnostics and resets.", icon: "wrench.and.screwdriver.fill") {
+            Section("Permissions") {
+                PermissionRow(title: "Microphone", detail: "To hear you", granted: state.micStatus == .authorized || Demo.isOn) {
+                    if state.micStatus == .notDetermined { Permissions.requestMicrophone { _ in } } else { Permissions.openMicrophoneSettings() }
+                }
+                PermissionRow(title: "Accessibility", detail: "To notice your shortcut and insert text", granted: state.accessibilityGranted || Demo.isOn) {
+                    Permissions.promptAccessibility(); Permissions.openAccessibilitySettings()
+                }
+                LabeledContent("Keyboard listener", value: state.hotkeyActive || Demo.isOn ? "Active" : "Waiting for Accessibility")
+            }
+            Section {
+                LabeledContent("Speech engine", value: engineText)
+                LabeledContent("Voice isolation", value: AudioEnhancer.isolationAvailable ? "Available" : "Unavailable")
+                HStack {
+                    Button("Run test dictation") { state.runDiagnostics() }
+                    Button("Restart speech engine") { state.whisper.start(modelID: prefs.modelID) }
+                    Button("Open log") { NSWorkspace.shared.open(Paths.log) }
+                }
+                if let r = state.diagnosticResult {
+                    Text(r).font(.system(size: 12, design: .monospaced)).foregroundStyle(Theme.text2).textSelection(.enabled)
+                }
+            } header: {
+                Text("Diagnostics")
+            } footer: {
+                Hint(text: "The test speaks a sentence with the system voice and runs it through the full pipeline — no microphone needed.")
+            }
+            Section {
+                Button("Show onboarding again") { prefs.onboarded = false; state.selectedPage = .home }
+                Button("Reset all settings…", role: .destructive) { confirmReset = true }
+            }
+        }
+        .confirmationDialog("Reset every setting to its default? Your history, dictionary and snippets are kept.", isPresented: $confirmReset) {
+            Button("Reset settings", role: .destructive) { prefs.resetAll(); NSApp.terminate(nil) }
+        } message: { Text("Fisper will quit; open it again to start fresh.") }
+    }
+
+    private var engineText: String {
+        if Demo.isOn { return "Ready (Whisper Turbo)" }
+        switch state.whisper.state {
+        case .ready: return "Ready (\(WhisperModelInfo.info(for: prefs.modelID).title))"
+        case .starting: return "Starting…"
+        case .missingModel: return "No model downloaded"
+        case .failed(let m): return m
+        case .stopped: return "Stopped"
+        }
+    }
+}
+
+struct PermissionRow: View {
+    let title: String
+    var detail: String = ""
+    let granted: Bool
+    let action: () -> Void
+    var body: some View {
+        LabeledContent {
+            if granted {
+                Label("Granted", systemImage: "checkmark.circle.fill").foregroundStyle(Theme.success)
+            } else {
+                Button("Grant access", action: action).buttonStyle(PrimaryButton())
+            }
+        } label: {
+            Text(title)
+            if !detail.isEmpty { Hint(text: detail) }
+        }
+    }
+}
+
+struct InfoNote: View {
+    let text: String
+    var button: String?
+    var action: (() -> Void)?
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "info.circle").foregroundStyle(Theme.forest)
+            Text(text).font(.system(size: 12)).foregroundStyle(Theme.text2).fixedSize(horizontal: false, vertical: true)
+            Spacer()
+            if let button, let action { Button(button, action: action).buttonStyle(SecondaryButton()) }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Theme.forestSoft))
+        .padding(.vertical, 4)
     }
 }

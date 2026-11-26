@@ -47,6 +47,50 @@ enum Paster {
         }
     }
 
+    /// Types text as keystrokes — for apps that block pasting (some terminals, remote desktops, games).
+    static func type(_ text: String) {
+        let src = CGEventSource(stateID: .combinedSessionState)
+        let utf16 = Array(text.utf16)
+        var i = 0
+        while i < utf16.count {
+            let chunk = Array(utf16[i..<min(i + 16, utf16.count)])
+            if chunk.count == 1 && (chunk[0] == 10 || chunk[0] == 13) {
+                pressReturn(); i += 1; continue
+            }
+            // send newlines as Return presses so chat apps don't get raw control chars
+            if let nl = chunk.firstIndex(where: { $0 == 10 || $0 == 13 }) {
+                if nl > 0 { postUnicode(Array(chunk[0..<nl]), src) }
+                pressReturn(shift: true); i += nl + 1; continue
+            }
+            postUnicode(chunk, src)
+            i += chunk.count
+            usleep(4_000)
+        }
+    }
+
+    private static func postUnicode(_ chars: [UInt16], _ src: CGEventSource?) {
+        guard let down = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: true),
+              let up = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: false) else { return }
+        chars.withUnsafeBufferPointer { buf in
+            down.keyboardSetUnicodeString(stringLength: buf.count, unicodeString: buf.baseAddress)
+            up.keyboardSetUnicodeString(stringLength: buf.count, unicodeString: buf.baseAddress)
+        }
+        for e in [down, up] { e.flags = []; e.setIntegerValueField(.eventSourceUserData, value: HotkeyManager.syntheticMarker) }
+        down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
+    }
+
+    static func pressReturn(shift: Bool = false) {
+        let src = CGEventSource(stateID: .combinedSessionState)
+        let k = CGKeyCode(kVK_Return)
+        let down = CGEvent(keyboardEventSource: src, virtualKey: k, keyDown: true)
+        let up = CGEvent(keyboardEventSource: src, virtualKey: k, keyDown: false)
+        for e in [down, up] {
+            e?.flags = shift ? .maskShift : []
+            e?.setIntegerValueField(.eventSourceUserData, value: HotkeyManager.syntheticMarker)
+        }
+        down?.post(tap: .cghidEventTap); usleep(6_000); up?.post(tap: .cghidEventTap)
+    }
+
     static func postCommandV() {
         let src = CGEventSource(stateID: .combinedSessionState)
         src?.setLocalEventsFilterDuringSuppressionState([.permitLocalMouseEvents, .permitSystemDefinedEvents], state: .eventSuppressionStateSuppressionInterval)
@@ -165,17 +209,20 @@ enum Sounds {
 
     static func play(_ name: String) {
         guard Preferences.shared.playSounds else { return }
+        let volume = Float(Preferences.shared.soundVolume)
         if players[name] == nil {
             let data: Data
             switch name {
-            case "start": data = tone(freqs: [740, 1110], duration: 0.09, volume: 0.22)
-            case "stop": data = tone(freqs: [1110, 740], duration: 0.09, volume: 0.2)
-            case "cancel": data = tone(freqs: [520, 390], duration: 0.11, volume: 0.18)
-            default: data = tone(freqs: [880], duration: 0.08, volume: 0.15)
+            case "start": data = tone(freqs: [784, 1175], duration: 0.075, volume: 0.24)
+            case "stop": data = tone(freqs: [1175, 784], duration: 0.075, volume: 0.22)
+            case "cancel": data = tone(freqs: [587, 440], duration: 0.09, volume: 0.2)
+            case "lock": data = tone(freqs: [988, 1319, 1568], duration: 0.05, volume: 0.2)
+            default: data = tone(freqs: [880], duration: 0.07, volume: 0.15)
             }
             players[name] = try? AVAudioPlayer(data: data)
             players[name]?.prepareToPlay()
         }
+        players[name]?.volume = volume
         players[name]?.currentTime = 0
         players[name]?.play()
     }

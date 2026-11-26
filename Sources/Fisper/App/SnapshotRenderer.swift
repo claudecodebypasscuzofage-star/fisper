@@ -29,19 +29,25 @@ enum SnapshotRenderer {
                to: dir.appendingPathComponent("onboarding.png"), appearance: .aqua)
         prefs.onboarded = true
 
-        // flow bar states
-        let bars: [(String, AnyView)] = [
-            ("bar-idle", AnyView(IdlePill(hovering: false, keyLabel: "fn"))),
-            ("bar-hover", AnyView(IdlePill(hovering: true, keyLabel: "fn"))),
-            ("bar-recording", AnyView(RecordingPill(levels: (0..<28).map { i in Float(0.35 + 0.6 * abs(sin(Double(i) * 0.7))) }, handsFree: false, onCancel: {}, onDone: {}))),
-            ("bar-handsfree", AnyView(RecordingPill(levels: (0..<28).map { i in Float(0.3 + 0.6 * abs(cos(Double(i) * 0.5))) }, handsFree: true, onCancel: {}, onDone: {}))),
-            ("bar-processing", AnyView(ProcessingPill())),
-            ("bar-notice", AnyView(NoticePill(message: "We couldn't hear you", isError: true))),
+        // flow bar states, in both styles
+        let lv = (0..<28).map { i in Float(0.35 + 0.6 * abs(sin(Double(i) * 0.7))) }
+        let phases: [(String, AppState.Phase, Bool)] = [
+            ("idle", .idle, false), ("hover", .idle, true), ("recording", .recording(handsFree: false), false),
+            ("handsfree", .recording(handsFree: true), false), ("processing", .processing, false),
+            ("notice", .notice("We couldn't hear you", isError: true), false),
         ]
-        for (name, v) in bars {
-            render(ZStack { Color(hex: 0xD9D6CE); v }.frame(width: 300, height: 70), size: NSSize(width: 300, height: 70),
-                   to: dir.appendingPathComponent("\(name).png"), appearance: .aqua)
+        for style in BarStyle.allCases {
+            for (name, phase, hover) in phases {
+                let v = ZStack {
+                    LinearGradient(colors: [Color(hex: 0x7BA7D9), Color(hex: 0xC9A5E0), Color(hex: 0xF2C6A0)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                    FlowPill(phase: phase, levels: lv, hovering: hover, keyLabel: "fn", style: style)
+                }.frame(width: 300, height: 70)
+                render(v, size: NSSize(width: 300, height: 70), to: dir.appendingPathComponent("bar-\(style.rawValue)-\(name).png"), appearance: .aqua)
+            }
         }
+        // menu bar popover
+        render(MenuBarPanel().environmentObject(state).environmentObject(prefs).background(Theme.canvas), size: NSSize(width: 320, height: 420),
+               to: dir.appendingPathComponent("menubar.png"), appearance: .aqua)
         prefs.onboarded = wasOnboarded
         print("rendered to \(dir.path)")
         exit(0)
@@ -51,7 +57,9 @@ enum SnapshotRenderer {
         let host = NSHostingView(rootView: view)
         host.appearance = NSAppearance(named: appearance)
         host.frame = NSRect(origin: .zero, size: size)
-        let win = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        let win = NSWindow(contentRect: host.frame, styleMask: [.titled, .fullSizeContentView], backing: .buffered, defer: false)
+        win.titlebarAppearsTransparent = true
+        win.titleVisibility = .hidden
         win.appearance = NSAppearance(named: appearance)
         win.contentView = host
         host.layoutSubtreeIfNeeded()
