@@ -131,7 +131,7 @@ struct PermissionBanner: View {
                     }
                 }
                 if !state.accessibilityGranted {
-                    row("Accessibility access", "Lets Fisper listen for your shortcut and paste text.") {
+                    row("Accessibility access", "System Settings → Privacy & Security → Accessibility → switch on Fisper. Not listed? Click +, pick Fisper from Applications.") {
                         Permissions.promptAccessibility(); Permissions.openAccessibilitySettings()
                     }
                 }

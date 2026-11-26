@@ -72,6 +72,11 @@ final class AppState: ObservableObject {
         Log.trim()
         Log.info("Fisper boot. model=\(prefs.modelID) shortcut=\(prefs.hotkey.keyLabel) ax=\(accessibilityGranted) mic=\(micStatus.rawValue)")
         hotkeys.shortcut = prefs.hotkey
+        hotkeys.holdDelay = prefs.minHoldSeconds
+        hotkeys.isHandsFreeActive = { [weak self] in
+            if case .recording(true) = self?.phase { return true }
+            return false
+        }
         hotkeys.pasteLastShortcut = prefs.pasteLastShortcut
         hotkeys.toggleShortcut = prefs.toggleShortcut
         hotkeys.handler = { [weak self] ev in self?.handle(ev) ?? false }
@@ -92,6 +97,7 @@ final class AppState: ObservableObject {
         }
 
         prefs.$hotkey.dropFirst().sink { [weak self] h in self?.hotkeys.shortcut = h }.store(in: &bag)
+        prefs.$minHoldSeconds.dropFirst().sink { [weak self] v in self?.hotkeys.holdDelay = v }.store(in: &bag)
         prefs.$pasteLastShortcut.dropFirst().sink { [weak self] h in self?.hotkeys.pasteLastShortcut = h }.store(in: &bag)
         prefs.$toggleShortcut.dropFirst().sink { [weak self] h in self?.hotkeys.toggleShortcut = h }.store(in: &bag)
         prefs.$modelID.dropFirst().removeDuplicates().sink { [weak self] id in self?.whisper.start(modelID: id) }.store(in: &bag)
@@ -122,6 +128,15 @@ final class AppState: ObservableObject {
         }
         applyRetention()
         pruneAudio()
+
+        // Without Accessibility, Fisper isn't even listed in System Settings until it asks — so ask right away.
+        if !Permissions.accessibility && prefs.onboarded {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                guard !Permissions.accessibility else { return }
+                Log.info("permission: prompting for accessibility")
+                Permissions.promptAccessibility()
+            }
+        }
     }
 
     func shutdown() {
@@ -175,7 +190,7 @@ final class AppState: ObservableObject {
             return false
         case .released:
             guard case .recording(let handsFree) = phase, !handsFree else { return false }
-            let held = Date().timeIntervalSince(pressTime)
+            let held = Date().timeIntervalSince(pressTime) + (prefs.hotkey.isModifierOnly ? 0 : prefs.minHoldSeconds)
             if held < prefs.minHoldSeconds {
                 if prefs.doubleTapHandsFree {
                     let work = DispatchWorkItem { [weak self] in
@@ -483,16 +498,41 @@ final class AppState: ObservableObject {
 
         let engine = activeEngine
         let examples = prefs.matchMyStyle ? personal.styleExamples(for: AppCategory.of(bundleID: bundleID), history: history.items) : []
-        if engine != .off, let polished = await polisher.polish(out, engine: engine, ollamaModel: prefs.ollamaModel, examples: examples) {
+        if engine != .off, (!prefs.smartSkipAI || Self.needsAI(raw: raw, cleaned: out, prefs: prefs)),
+           let polished = await polisher.polish(out, engine: engine, ollamaModel: prefs.ollamaModel, examples: examples) {
             out = polished
             by = engine == .apple ? "Apple Intelligence" : "Ollama"
         }
 
         out = TextCleaner.fixSpacing(out)
+        out = TextCleaner.fixCapsAfterComma(out)
         out = TextCleaner.applyDictionary(out, entries: dictionary.items)
         out = TextCleaner.applyStyle(out, prefs.style(for: AppCategory.of(bundleID: bundleID)))
         out = TextCleaner.expandSnippets(out, snippets: snippets.items)
         return (out.trimmingCharacters(in: .whitespacesAndNewlines), by)
+    }
+
+    /// Whisper already punctuates and capitalizes. The AI pass (300–700 ms) only runs when there's something it
+    /// can fix: fillers it can't safely strip by rule, self-corrections, spoken lists, numbers, or longer text.
+    static func needsAI(raw: String, cleaned: String, prefs: Preferences) -> Bool {
+        if prefs.correctionLevel == .polished || !prefs.customInstructions.trimmingCharacters(in: .whitespaces).isEmpty { return true }
+        let r = " " + raw.lowercased() + " "
+        let cues = [" like ", " you know ", " i mean ", " no wait", "wait no", " actually ", " sorry ", "scratch that", " or rather ",
+                    " make that ", " change that ", " instead ", " no no ", " kind of ", " sort of ", " basically ", " literally "]
+        if cues.contains(where: { r.contains($0) }) { return true }
+        if prefs.formatLists && (r.contains(" first ") || r.contains(" second ") || r.contains(" number one ") || r.contains(" bullet")
+                                 || (cleaned.filter({ $0 == "," }).count >= 2 && r.contains(" and "))) { return true }
+        if r.hasPrefix(" okay so ") || r.hasPrefix(" ok so ") || r.hasPrefix(" so um ") || r.hasPrefix(" well um ") { return true }
+        if prefs.numbersAsDigits && r.range(of: #"\b(one|two|three|four|five|six|seven|eight|nine|ten|twenty|thirty|hundred|thousand)\b"#, options: .regularExpression) != nil { return true }
+        let n = cleaned.split(separator: " ").count
+        if n >= 10 { return true }          // long enough that grammar slips are likely — worth the ~0.4 s
+        // let macOS's grammar checker flag obvious problems in shorter text
+        let checker = NSSpellChecker.shared
+        var details: NSArray?
+        let range = checker.checkGrammar(of: cleaned, startingAt: 0, language: nil, wrap: false, inSpellDocumentWithTag: 0, details: &details)
+        if range.location != NSNotFound || (details?.count ?? 0) > 0 { return true }
+        let misspelled = checker.checkSpelling(of: cleaned, startingAt: 0)
+        return misspelled.location != NSNotFound
     }
 
     func whisperPrompt() -> String {

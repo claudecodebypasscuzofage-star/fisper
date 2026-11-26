@@ -15,6 +15,12 @@ final class HotkeyManager {
     var toggleShortcut: Shortcut?
     /// While the user records a new shortcut, the tap stays out of the way.
     var paused = false
+    /// Key-combo shortcuts: a tap shorter than this is passed through as normal typing; holding longer dictates.
+    var holdDelay: TimeInterval = 0.28
+    /// True while a hands-free dictation is running (then a tap of the shortcut finishes it immediately).
+    var isHandsFreeActive: () -> Bool = { false }
+    private var pendingHold: DispatchWorkItem?
+    private var heldFlags: CGEventFlags = []
     private(set) var isDown = false
     private(set) var isInstalled = false
 
@@ -97,8 +103,22 @@ final class HotkeyManager {
                 swallowedKeyUps.insert(Int64(keycode)); return nil
             }
             if !shortcut.isModifierOnly && matches(shortcut, keycode, generic) {
-                if !isDown && !isRepeat { isDown = true; _ = handler?(.pressed) }
-                swallowedKeyUps.insert(Int64(keycode)); return nil
+                if isRepeat { return nil }
+                if isHandsFreeActive() { _ = handler?(.pressed); swallowedKeyUps.insert(Int64(keycode)); return nil }
+                if !isDown && pendingHold == nil {
+                    heldFlags = event.flags
+                    let w = DispatchWorkItem { [weak self] in
+                        MainActor.assumeIsolated {
+                            guard let self, self.pendingHold != nil else { return }
+                            self.pendingHold = nil
+                            self.isDown = true
+                            _ = self.handler?(.pressed)
+                        }
+                    }
+                    pendingHold = w
+                    DispatchQueue.main.asyncAfter(deadline: .now() + holdDelay, execute: w)
+                }
+                return nil
             }
             if keycode == kVK_Escape {
                 if handler?(.escape) == true { swallowedKeyUps.insert(Int64(keycode)); return nil }
@@ -110,16 +130,34 @@ final class HotkeyManager {
                 }
             }
         case .keyUp:
-            if !shortcut.isModifierOnly && keycode == shortcut.keyCode && isDown {
-                isDown = false
-                _ = handler?(.released)
-                swallowedKeyUps.remove(Int64(keycode))
-                return nil
+            if !shortcut.isModifierOnly && keycode == shortcut.keyCode {
+                if let w = pendingHold {
+                    // just a tap: give the keystroke back to the app as if Fisper weren't there
+                    w.cancel(); pendingHold = nil
+                    Self.retype(keycode: keycode, flags: heldFlags)
+                    return nil
+                }
+                if isDown {
+                    isDown = false
+                    _ = handler?(.released)
+                    swallowedKeyUps.remove(Int64(keycode))
+                    return nil
+                }
             }
             if swallowedKeyUps.remove(Int64(keycode)) != nil { return nil }
         default: break
         }
         return Unmanaged.passUnretained(event)
+    }
+
+    private static func retype(keycode: Int, flags: CGEventFlags) {
+        let src = CGEventSource(stateID: .combinedSessionState)
+        for down in [true, false] {
+            guard let e = CGEvent(keyboardEventSource: src, virtualKey: CGKeyCode(keycode), keyDown: down) else { continue }
+            e.flags = flags
+            e.setIntegerValueField(.eventSourceUserData, value: syntheticMarker)
+            e.post(tap: .cghidEventTap)
+        }
     }
 
     private func modifierShortcutHeld(_ raw: UInt64) -> Bool {

@@ -174,7 +174,7 @@ final class WhisperServer: ObservableObject {
         // Measured: ≥ 2× the clip's frames (50/s) never looped; 1.6× sometimes did.
         if fast && duration < 20 {
             let needed = Int((duration * 50 * 2.0).rounded(.up))
-            audioCtx = (max(512, needed) + 63) / 64 * 64
+            audioCtx = (max(384, needed) + 63) / 64 * 64
             if audioCtx >= 1400 { audioCtx = 0 }
         }
 

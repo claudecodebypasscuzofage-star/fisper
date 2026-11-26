@@ -124,6 +124,18 @@ enum TextCleaner {
         return t.trimmingCharacters(in: .whitespaces)
     }
 
+    /// "Yo, Are you there?" → "Yo, are you there?" (only for common words, so names stay capitalized)
+    static func fixCapsAfterComma(_ text: String) -> String {
+        var t = text
+        let re = try! NSRegularExpression(pattern: #",\s+([A-Z][a-z']+)\b"#)
+        for m in re.matches(in: t, range: NSRange(t.startIndex..., in: t)).reversed() {
+            guard let r = Range(m.range(at: 1), in: t) else { continue }
+            let w = String(t[r])
+            if commonLowerStarts.contains(w.lowercased()) && w != "I" { t.replaceSubrange(r, with: w.lowercased()) }
+        }
+        return t
+    }
+
     static func capitalizeSentences(_ text: String) -> String {
         var chars = Array(text)
         var capNext = true

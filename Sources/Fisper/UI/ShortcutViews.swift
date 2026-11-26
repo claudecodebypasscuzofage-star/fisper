@@ -57,6 +57,9 @@ struct ShortcutField: View {
                 Text(allowModifierOnly ? "Hold any keys, then let go · esc to cancel" : "Press a key combo · esc to cancel")
                     .font(.system(size: 10.5)).foregroundStyle(Theme.text3)
             }
+            if !recorder.isRecording, let s = shortcut, !s.isModifierOnly, allowModifierOnly {
+                Text("Tap types \(s.keyLabel) as usual · hold to dictate").font(.system(size: 10.5)).foregroundStyle(Theme.text3)
+            }
             if let m = recorder.message {
                 Text(m).font(.system(size: 10.5)).foregroundStyle(.orange)
             }

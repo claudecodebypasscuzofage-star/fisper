@@ -25,14 +25,24 @@ final class Personalization: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
     }
 
-    /// Recent dictations from the same kind of app, used as tone examples for the AI.
+    /// Short, generic notes describing how the user writes in this kind of app (derived from their history).
     func styleExamples(for category: AppCategory, history: [Transcript]) -> [String] {
-        history.lazy
-            .filter { !$0.text.isEmpty && AppCategory.of(bundleID: $0.bundleID) == category && $0.raw != "demo" }
-            .map(\.text)
-            .filter { let n = $0.split(separator: " ").count; return n >= 6 && n <= 45 && !$0.contains("\n") }
-            .prefix(3)
-            .map { String($0) }
+        let texts = history.lazy.filter { !$0.text.isEmpty && AppCategory.of(bundleID: $0.bundleID) == category && $0.raw != "demo" }
+            .prefix(40).map(\.text)
+        guard texts.count >= 5 else { return [] }
+        let all = texts.joined(separator: " ")
+        let words = max(1, all.split(separator: " ").count)
+        let sentences = max(1, all.components(separatedBy: CharacterSet(charactersIn: ".!?")).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.count)
+        var notes: [String] = []
+        let contractions = all.components(separatedBy: "'").count - 1
+        if Double(contractions) / Double(words) > 0.02 { notes.append("Uses contractions (it's, don't) — keep them.") }
+        let exclam = all.filter { $0 == "!" }.count
+        notes.append(exclam * 10 >= texts.count ? "Uses exclamation marks when excited." : "Rarely uses exclamation marks — don't add them.")
+        let avg = words / sentences
+        if avg <= 10 { notes.append("Prefers short, direct sentences.") } else if avg >= 22 { notes.append("Writes long, flowing sentences.") }
+        let emoji = all.unicodeScalars.contains { $0.properties.isEmojiPresentation }
+        if emoji { notes.append("Sometimes uses emoji — keep any the speaker names.") }
+        return notes
     }
 
     // MARK: Building the profile

@@ -6,6 +6,7 @@ import Combine
 @MainActor
 final class FlowBarModel: ObservableObject {
     @Published var hovering = false
+    @Published var nearby = false
     @Published var dragging = false
     @Published var anchorTop = false
     var pillFrame: CGRect = .zero          // in the panel's SwiftUI coordinates (top-left origin)
@@ -166,7 +167,12 @@ final class FlowBarController {
         let f = model.pillFrame
         guard f.width > 0 else { return }
         let screenRect = NSRect(x: panel.frame.minX + f.minX, y: panel.frame.maxY - f.maxY, width: f.width, height: f.height)
-        let inside = screenRect.insetBy(dx: -8, dy: -8).contains(NSEvent.mouseLocation)
+        let mouse = NSEvent.mouseLocation
+        let near = screenRect.insetBy(dx: -90, dy: -60).contains(mouse)
+        if model.nearby != near { withAnimation(.easeOut(duration: 0.2)) { model.nearby = near } }
+        // in "near pointer" mode the idle pill is invisible until you approach — don't eat clicks before that
+        let pillShown = state.phase != .idle || prefs.idleBar == .always || (prefs.idleBar == .nearby && near)
+        let inside = pillShown && screenRect.insetBy(dx: -8, dy: -8).contains(mouse)
         if panel.ignoresMouseEvents == inside { panel.ignoresMouseEvents = !inside }
         if model.hovering != inside {
             withAnimation(.spring(response: 0.32, dampingFraction: 0.8)) { model.hovering = inside }
@@ -202,7 +208,7 @@ struct FlowBarView: View {
             FlowPill(phase: state.phase, levels: state.levels, hovering: model.hovering || model.dragging,
                      keyLabel: prefs.hotkey.keyLabel, style: prefs.barStyle,
                      barColor: prefs.barColor.color, waveColor: prefs.waveColor.color, opacity: prefs.barOpacity,
-                     hidden: !prefs.showIdleBar && state.phase == .idle,
+                     hidden: state.phase == .idle && (prefs.idleBar == .dictating || (prefs.idleBar == .nearby && !model.nearby && !model.hovering)),
                      onTap: { state.toggleHandsFree() },
                      onCancel: { state.cancel(silent: false) },
                      onDone: { state.stopAndTranscribe(reason: "button") })
@@ -218,7 +224,9 @@ struct FlowBarView: View {
                     Divider()
                     Button("Move to bottom center") { model.onMove(.bottom) }
                     Button("Move to top center") { model.onMove(.top) }
-                    Toggle("Show when idle", isOn: Binding(get: { prefs.showIdleBar }, set: { prefs.showIdleBar = $0 }))
+                    Picker("Show the bar", selection: Binding(get: { prefs.idleBar }, set: { prefs.idleBar = $0 })) {
+                        ForEach(IdleBarMode.allCases) { Text($0.title).tag($0) }
+                    }
                     Divider()
                     Button("Flow bar settings…") {
                         state.selectedPage = .appearance

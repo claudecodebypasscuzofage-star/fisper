@@ -25,10 +25,10 @@ Fisper does the same job **entirely on your Mac**: Whisper runs on the GPU for s
 
 **Dictation**
 - **Hold-to-talk anywhere** — hold <kbd>fn</kbd>, speak, release. Text lands at your cursor in any app: Messages, Mail, Slack, Notes, VS Code/Cursor, terminals, ChatGPT/Claude…
-- **Pick any keys** — click *Change…* and press whatever you want: a single modifier (fn, right ⌥, left ⌃), a chord (left ⌃ + left ⌥), or a key combo (⌃⌥ Space, F5). Separate, customizable shortcuts for *start/stop hands-free* and *paste last*.
+- **Pick any keys** — click *Change…* and press whatever you want: a single modifier (fn, right ⌥, left ⌃), a chord (left ⌃ + left ⌥), or a key combo (⌃⌥ Space, F5). With key combos a quick **tap still types the key** — only holding it dictates. Separate, customizable shortcuts for *start/stop hands-free* and *paste last*.
 - **Hands-free** — double-tap the key or press <kbd>space</kbd> while holding it; finish with the key or ✓. <kbd>Esc</kbd> cancels, <kbd>⌃⌘V</kbd> pastes the last dictation again.
 - **Transcribes while you speak** — long dictations are streamed to Whisper in the background at natural pauses, so a 2-minute ramble finishes as fast as a sentence.
-- **Fast** — ~0.3–0.6 s speech-to-text on Apple Silicon (adaptive Whisper context, model kept warm), ~1 s release-to-text including AI clean-up.
+- **Fast** — ~0.3–0.5 s speech-to-text on Apple Silicon (adaptive Whisper context, model kept warm). Short, clean phrases skip the AI entirely and land in ~0.4 s; the AI only runs when there's something to fix (fillers, self-corrections, lists, grammar, longer text).
 
 **Noise & clarity**
 - **Voice isolation** — Apple's on-device ML voice-isolation model (the tech behind FaceTime's *Voice Isolation*) strips background noise, music and nearby chatter. *Automatic* mode measures your room's signal-to-noise and only applies it when needed; strength is adjustable (85% measured best for accuracy).
@@ -40,16 +40,16 @@ Fisper does the same job **entirely on your Mac**: Whisper runs on the GPU for s
 - Removes *um / uh*, stutters and repeats; applies self-corrections — *"Tuesday, no wait, Wednesday"* → *"Wednesday"*; fixes grammar — *"it were closed so we goes home"* → *"it was closed, so we went home"*.
 - **Your rules** — plain-English instructions the AI follows every time ("Use British spelling", "Never use exclamation marks").
 - Lists → bullets, numbers → digits, *"new line"* / *"new paragraph"*, per-app **Style** (Formal / Casual / very casual).
-- Every AI rewrite is validated: if it adds content, answers your question or drops text, Fisper falls back to the deterministic cleaner.
+- **Never puts words in your mouth** — every AI rewrite is checked: if it drops one of your sentences, invents words, answers your question or adds a greeting, Fisper keeps your original (cleaned) text instead.
 - **Dictionary** (names, jargon, "chat GPT → ChatGPT" — also fed to Whisper as hints) and **Snippets** ("my email" → your address).
 
 **Learns you**
 - **Learns from your corrections** — fix a word right after dictating ("Ria" → "Priya", "iphone" → "iPhone") and it's added to your Dictionary automatically.
 - **Learns your names & jargon** from your history and hints them to the speech model.
-- **Matches your writing style** — the AI sees a few of your own recent dictations from the same kind of app, so it keeps your tone, casing and phrasing.
+- **Matches your writing style** — the AI is told your habits in each kind of app (sentence length, contractions, exclamation marks), never your actual messages.
 - **Your voice** insights — filler words you use, names it picked up, corrections learned.
 
-**The flow bar** — drag it anywhere (it remembers, snaps to center), click it to dictate, right-click for options. Glass or Midnight, with your own bar color, waveform color, opacity and size.
+**The flow bar** — only appears while you dictate (or optionally when your pointer is near it, or always). Drag it anywhere (it remembers, snaps to center), click it to dictate, right-click for options. Glass or Midnight, with your own bar color, waveform color, opacity and size.
 
 **Make it yours** — 50+ settings in a native System Settings–style layout: shortcut, tap sensitivity, hands-free behaviour, max length, excluded apps, insert method (paste / type it out / clipboard), smart spacing, trailing space, auto-Return, model, language, noise mode, isolation strength, accent color (presets or any color), light/dark/system, flow bar style, colors, opacity, position & size, sounds & volume, history retention…
 

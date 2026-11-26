@@ -307,6 +307,10 @@ struct WritingSettings: View {
                 }
                 .pickerStyle(.segmented)
                 Hint(text: prefs.correctionLevel.detail)
+                Toggle(isOn: $prefs.smartSkipAI) {
+                    Text("Fast mode: only use AI when needed")
+                    Hint(text: "Clean sentences are inserted instantly; the AI only runs for fillers, self-corrections, lists, numbers or grammar issues.")
+                }
                 Toggle("Remove filler words (um, uh) and stutters", isOn: $prefs.removeFillers)
                 Toggle("Turn spoken lists into bullet points", isOn: $prefs.formatLists)
                 Toggle("Write numbers as digits", isOn: $prefs.numbersAsDigits)
@@ -318,7 +322,7 @@ struct WritingSettings: View {
             Section {
                 Toggle(isOn: $prefs.matchMyStyle) {
                     Text("Match my writing style")
-                    Hint(text: "Shows the AI a few of your recent dictations from the same kind of app, so it keeps your tone, casing and phrasing.")
+                    Hint(text: "Tells the AI your habits in each kind of app (sentence length, contractions, exclamation marks) — never your actual messages.")
                 }
                 Toggle(isOn: $prefs.learnFromEdits) {
                     Text("Learn from my corrections")
@@ -450,7 +454,12 @@ struct AppearanceSettings: View {
                 LabeledContent("Size") {
                     Slider(value: $prefs.barScale, in: 0.8...1.4, step: 0.05).frame(width: 180)
                 }
-                Toggle("Show when idle", isOn: $prefs.showIdleBar)
+                Picker(selection: $prefs.idleBar) {
+                    ForEach(IdleBarMode.allCases) { Text($0.title).tag($0) }
+                } label: {
+                    Text("Show the bar")
+                    Hint(text: "It always appears while you dictate. “Near the pointer” keeps it invisible until you move the mouse to it.")
+                }
             }
             Section("Sound") {
                 Toggle("Sound effects", isOn: $prefs.playSounds)

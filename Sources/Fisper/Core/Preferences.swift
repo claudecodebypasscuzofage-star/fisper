@@ -72,6 +72,18 @@ enum BarPosition: String, CaseIterable, Identifiable, Codable {
     var title: String { self == .bottom ? "Bottom" : "Top" }
 }
 
+enum IdleBarMode: String, CaseIterable, Identifiable, Codable {
+    case dictating, nearby, always
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .dictating: return "Only while dictating"
+        case .nearby: return "When the pointer is near it"
+        case .always: return "Always"
+        }
+    }
+}
+
 enum BarStyle: String, CaseIterable, Identifiable, Codable {
     case glass, midnight
     var id: String { rawValue }
@@ -226,7 +238,9 @@ final class Preferences: ObservableObject {
     @Published var learnFromEdits: Bool { didSet { save(learnFromEdits, "learnFromEdits") } }
     @Published var learnVocabulary: Bool { didSet { save(learnVocabulary, "learnVocabulary") } }
     @Published var matchMyStyle: Bool { didSet { save(matchMyStyle, "matchMyStyle") } }
-    @Published var showIdleBar: Bool { didSet { save(showIdleBar, "showIdleBar") } }
+    @Published var smartSkipAI: Bool { didSet { save(smartSkipAI, "smartSkipAI") } }
+    @Published var idleBar: IdleBarMode { didSet { save(idleBar.rawValue, "idleBar") } }
+    var showIdleBar: Bool { idleBar != .dictating }
     @Published var barPosition: BarPosition { didSet { save(barPosition.rawValue, "barPosition") } }
     /// Where the user dragged the flow bar, as fractions of the screen's visible frame (center point). nil = preset position.
     @Published var barCustomPosition: CGPoint? {
@@ -321,7 +335,8 @@ final class Preferences: ObservableObject {
         learnFromEdits = d.object(forKey: "learnFromEdits") as? Bool ?? true
         learnVocabulary = d.object(forKey: "learnVocabulary") as? Bool ?? true
         matchMyStyle = d.object(forKey: "matchMyStyle") as? Bool ?? true
-        showIdleBar = d.object(forKey: "showIdleBar") as? Bool ?? true
+        smartSkipAI = d.object(forKey: "smartSkipAI") as? Bool ?? true
+        idleBar = IdleBarMode(rawValue: d.string(forKey: "idleBar") ?? "") ?? .dictating
         barPosition = BarPosition(rawValue: d.string(forKey: "barPosition") ?? "") ?? .bottom
         if let a = d.array(forKey: "barCustomPosition") as? [Double], a.count == 2 { barCustomPosition = CGPoint(x: a[0], y: a[1]) }
         barStyle = BarStyle(rawValue: d.string(forKey: "barStyle") ?? "") ?? .glass
